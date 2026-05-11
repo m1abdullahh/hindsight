@@ -2,7 +2,13 @@
 
 Internal screenshot-based time tracking for small teams. Members install a desktop app, pick a project, and start a timer. While tracking, the app captures periodic screenshots and aggregate activity metrics, then uploads them to a server. Managers and members both view their data through the same web app, scoped by role.
 
-> **Status:** Pre-development. Architecture and product decisions live in [`/docs`](./docs). Code starts after the docs are signed off.
+> **Status:** All three apps in active development.
+>
+> - **API** (Plans 00–05, 09): auth + orgs + members + invitations + projects + assignments + screenshot ingestion + reports. Tests passing against Neon.
+> - **Web** (Plans 06, 07, plus reports + screenshots gallery): admin and member portals — orgs, members, projects, screenshot gallery per project, time-totals reports (per-project + org-wide).
+> - **Desktop** (Plan 08, plus notifications + baseline timer): Tauri 2 tracker — login, picker, capture loop, outbox uploader, OS toasts on capture, "My time" panel, today-aware tracker timer. Windows installer signs + branded toasts via AUMID registration.
+>
+> Architecture and product decisions live in [`/docs`](./docs); concrete execution plans in [`/plans`](./plans).
 
 ---
 
@@ -11,13 +17,12 @@ Internal screenshot-based time tracking for small teams. Members install a deskt
 ```
 hindsight/
 ├── apps/
-│   ├── api/         # Fastify + TypeScript backend (REST, workers, presigning)
+│   ├── api/         # Express + TypeScript backend (REST, workers, presigning)
 │   ├── web/         # React + Vite SPA — admin and member portals
 │   └── desktop/     # Tauri 2 app (Win/Mac) — screenshot capture, outbox
 ├── packages/
 │   └── shared/      # Zod schemas, TS types, capability matrix shared across apps
 ├── docs/            # Source of truth for product + architecture decisions
-├── docker-compose.yml
 └── README.md
 ```
 
@@ -43,23 +48,23 @@ Quick links:
 
 ## Tech at a glance
 
-- **Backend:** Node 20, TypeScript, Fastify, Prisma, PostgreSQL, Redis, BullMQ
+- **Backend:** Node 20, TypeScript, Express, Prisma, PostgreSQL (Neon), Redis (Upstash), BullMQ
 - **Web:** React 18, Vite, TanStack Router/Query, Tailwind, shadcn/ui
 - **Desktop:** Tauri 2 (Rust + React), SQLite outbox
 - **Storage:** Cloudflare R2 (S3-compatible) for screenshots
-- **Hosting:** Single VPS via Docker Compose; Cloudflare in front
+- **Hosting:** Serverless cloud services (Neon + Upstash + R2); Cloudflare in front of the API host
 
 Full rationale in [`docs/03-tech-stack.md`](./docs/03-tech-stack.md).
 
 ## Quick start (development)
 
-> Setup will firm up once `apps/api` lands. The flow below is the planned one.
-
 **Prerequisites:**
-- Node.js 20 LTS
+
+- Node.js 20+ (22 LTS works)
 - pnpm 9+
-- Docker (for Postgres + Redis)
-- Rust toolchain (only if working on `apps/desktop`)
+- A Neon project (Postgres) — https://console.neon.tech
+- An Upstash Redis database — https://console.upstash.com
+- Rust toolchain (only when the desktop plan lands)
 
 **Bootstrap:**
 
@@ -67,41 +72,57 @@ Full rationale in [`docs/03-tech-stack.md`](./docs/03-tech-stack.md).
 # Install all workspace deps
 pnpm install
 
-# Start Postgres + Redis
-docker compose up -d
+# Copy env template — gitignored .env is read by the api.
+# Fill in DATABASE_URL (Neon) and REDIS_URL (Upstash).
+cp .env.example apps/api/.env
 
-# Copy env template and fill in
-cp .env.example .env
+# Generate the Prisma client and apply migrations to your Neon DB
+pnpm --filter @hindsight/api db:generate
+pnpm --filter @hindsight/api db:migrate
 
-# Run migrations
-pnpm --filter api db:migrate
+# Run the API (PORT 3001 by default)
+pnpm --filter @hindsight/api dev
 
-# Run the API + a worker (separate terminals or via a process manager)
-pnpm --filter api dev
-pnpm --filter api worker
-
-# Run the web app
-pnpm --filter web dev
-
-# Run the desktop app (requires Rust)
-pnpm --filter desktop tauri:dev
+# In a second terminal, run the worker
+pnpm --filter @hindsight/api worker
 ```
 
-The API is at `http://localhost:3001`, web at `http://localhost:5173`. The desktop app points at the API URL configured in its `.env`.
+Smoke test:
+
+```bash
+curl http://localhost:3001/healthz
+# => {"ok":true,"version":"dev"}
+```
+
+In separate terminals, run the web and desktop apps too:
+
+```bash
+pnpm --filter @hindsight/web dev          # Vite dev server, port 5173
+pnpm --filter @hindsight/desktop tauri:dev # Tauri shell + Vite for the desktop UI
+```
+
+To produce a Windows installer:
+
+```bash
+pnpm --filter @hindsight/desktop tauri:build
+# → apps/desktop/src-tauri/target/release/bundle/nsis/Hindsight_0.1.0_x64-setup.exe
+```
 
 ## Environment variables
 
 The full list lives in `.env.example` (committed) once the API exists. Highlights:
 
-| Variable | Used by | Purpose |
-|---|---|---|
-| `DATABASE_URL` | api, worker | Postgres connection string |
-| `REDIS_URL` | api, worker | Redis connection string |
-| `SESSION_SECRET` | api | Cookie signing key |
-| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | api, worker | Cloudflare R2 credentials |
-| `R2_BUCKET` | api, worker | Bucket name for screenshots |
-| `MAIL_PROVIDER_API_KEY` | api | Resend or Postmark key |
-| `PUBLIC_API_URL` | web, desktop | Where clients call the API |
+| Variable                                                      | Used by      | Purpose                                               |
+| ------------------------------------------------------------- | ------------ | ----------------------------------------------------- |
+| `DATABASE_URL`                                                | api, worker  | Neon Postgres connection string (`?sslmode=require`)  |
+| `TEST_DATABASE_URL`                                           | tests        | Neon test branch URL — used by `pnpm db:test:migrate` |
+| `REDIS_URL`                                                   | api, worker  | Upstash Redis connection string (`rediss://`)         |
+| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | api, worker  | Cloudflare R2 credentials                             |
+| `R2_BUCKET`                                                   | api, worker  | Bucket name for screenshots                           |
+| `MAIL_PROVIDER_API_KEY`                                       | api          | Resend or Postmark key                                |
+| `PUBLIC_API_URL`                                              | web, desktop | Where clients call the API                            |
+
+Bearer tokens are stored as `sha256(token)` in the DB, so there is no `SESSION_SECRET`.
 
 Never commit a real `.env`. Production values live in the deploy host's secret store.
 
@@ -128,21 +149,22 @@ Treat the docs as part of the source code, because they are.
 
 ## Scripts (root)
 
-| Script | What it does |
-|---|---|
-| `pnpm dev` | Run API + web concurrently |
-| `pnpm build` | Build all apps |
-| `pnpm test` | Run tests across all packages |
-| `pnpm lint` | Lint everything |
-| `pnpm format` | Prettier write |
-| `pnpm db:migrate` | Run pending Prisma migrations |
-| `pnpm db:studio` | Open Prisma Studio against local DB |
+| Script            | What it does                                                    |
+| ----------------- | --------------------------------------------------------------- |
+| `pnpm dev`        | Run API + web concurrently (web is a stub until its plan lands) |
+| `pnpm build`      | Build every workspace via `pnpm -r build`                       |
+| `pnpm test`       | Run tests across every workspace                                |
+| `pnpm lint`       | ESLint over the whole repo                                      |
+| `pnpm format`     | Prettier write                                                  |
+| `pnpm typecheck`  | `tsc --noEmit` in every workspace                               |
+| `pnpm db:migrate` | Run pending Prisma migrations against `DATABASE_URL` (Neon)     |
+| `pnpm db:studio`  | Open Prisma Studio against the configured DB                    |
 
 ## Deploy
 
-Production is a single VPS running `docker-compose.prod.yml` with the API, a worker, Postgres, and Redis. Cloudflare handles DNS and TLS. R2 handles screenshot storage. Backups: nightly `pg_dump` to a separate R2 bucket, 30-day retention.
+Production runs the API + worker on a serverless host (Railway/Fly.io/Render — TBD), with Postgres on **Neon** and Redis on **Upstash**. Cloudflare handles DNS and TLS for the API hostname. R2 handles screenshot storage. Backups: Neon's point-in-time recovery on the paid tier, plus a periodic `pg_dump` to R2 for cold archive.
 
-CI deploys `main` on green via SSH + `docker compose pull && up -d`. See `.github/workflows/deploy.yml` once it lands.
+CI deploys `main` on green. See `.github/workflows/deploy.yml` once it lands.
 
 ## License
 

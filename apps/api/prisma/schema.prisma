@@ -1,0 +1,252 @@
+// Hindsight API — Prisma schema.
+// Plan 02 (auth & orgs) lands the foundation models here.
+// Real models grow with each feature plan.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String    @id
+  name      String
+  slug      String    @unique
+  plan      String    @default("internal")
+  createdAt DateTime  @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  memberships Membership[]
+  auditLogs   AuditLog[]
+  invitations Invitation[]
+  projects    Project[]
+
+  @@map("organizations")
+}
+
+model User {
+  id              String    @id
+  email           String    @unique
+  passwordHash    String?   @map("password_hash")
+  name            String
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  deletedAt       DateTime? @map("deleted_at")
+
+  memberships     Membership[]
+  devices         Device[]
+  tokens          Token[]
+  invitationsSent Invitation[]        @relation("InvitedBy")
+  assignments     ProjectAssignment[]
+  timeEntries     TimeEntry[]
+
+  @@map("users")
+}
+
+model Membership {
+  id        String           @id
+  orgId     String           @map("org_id")
+  userId    String           @map("user_id")
+  role      Role
+  status    MembershipStatus @default(active)
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+enum Role {
+  owner
+  admin
+  member
+}
+
+enum MembershipStatus {
+  active
+  suspended
+}
+
+model Token {
+  id         String    @id
+  userId     String    @map("user_id")
+  kind       TokenKind
+  tokenHash  String    @unique @map("token_hash")
+  deviceId   String?   @unique @map("device_id")
+  expiresAt  DateTime? @map("expires_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  revokedAt  DateTime? @map("revoked_at")
+  userAgent  String?   @map("user_agent")
+  ipAddress  String?   @map("ip_address")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([kind, revokedAt])
+  @@map("tokens")
+}
+
+enum TokenKind {
+  web
+  device
+  password_reset
+  email_verify
+}
+
+model Device {
+  id             String    @id
+  userId         String    @map("user_id")
+  deviceName     String    @map("device_name")
+  os             String
+  appVersion     String    @map("app_version")
+  lastSeenAt     DateTime? @map("last_seen_at")
+  presenceState  String?   @map("presence_state")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  revokedAt      DateTime? @map("revoked_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       Token?
+  timeEntries TimeEntry[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model AuditLog {
+  id         String   @id
+  orgId      String   @map("org_id")
+  actorId    String?  @map("actor_id")
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+  @@map("audit_logs")
+}
+
+model Invitation {
+  id          String    @id
+  orgId       String    @map("org_id")
+  email       String
+  role        Role
+  tokenHash   String    @unique @map("token_hash")
+  invitedById String    @map("invited_by_id")
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  acceptedBy  String?   @map("accepted_by")
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@unique([orgId, email, acceptedAt])
+  @@index([email])
+  @@index([orgId, createdAt])
+  @@map("invitations")
+}
+
+model Project {
+  id                        String    @id
+  orgId                     String    @map("org_id")
+  name                      String
+  description               String?
+  screenshotIntervalMinutes Int       @default(10) @map("screenshot_interval_minutes")
+  blurScreenshots           Boolean   @default(false) @map("blur_screenshots")
+  archivedAt                DateTime? @map("archived_at")
+  createdBy                 String    @map("created_by")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  assignments  ProjectAssignment[]
+  timeEntries  TimeEntry[]
+
+  @@index([orgId])
+  @@index([orgId, archivedAt])
+  @@map("projects")
+}
+
+model ProjectAssignment {
+  id              String    @id
+  projectId       String    @map("project_id")
+  userId          String    @map("user_id")
+  hourlyRateCents Int?      @map("hourly_rate_cents")
+  assignedAt      DateTime  @default(now()) @map("assigned_at")
+  removedAt       DateTime? @map("removed_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@index([projectId, removedAt])
+  @@map("project_assignments")
+}
+
+model TimeEntry {
+  id                 String    @id
+  userId             String    @map("user_id")
+  projectId          String    @map("project_id")
+  deviceId           String    @map("device_id")
+  startedAt          DateTime  @map("started_at")
+  endedAt            DateTime? @map("ended_at")
+  totalActiveSeconds Int       @default(0) @map("total_active_seconds")
+  totalIdleSeconds   Int       @default(0) @map("total_idle_seconds")
+  notes              String?
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  device      Device       @relation(fields: [deviceId], references: [id])
+  screenshots Screenshot[]
+
+  @@index([userId, startedAt])
+  @@index([projectId, startedAt])
+  @@index([userId, endedAt])
+  @@map("time_entries")
+}
+
+model Screenshot {
+  id                  String           @id
+  timeEntryId         String           @map("time_entry_id")
+  capturedAt          DateTime         @map("captured_at")
+  s3Key               String           @map("s3_key")
+  thumbnailS3Key      String?          @map("thumbnail_s3_key")
+  blurredS3Key        String?          @map("blurred_s3_key")
+  width               Int              @default(0)
+  height              Int              @default(0)
+  monitorIndex        Int              @default(0) @map("monitor_index")
+  activeWindowTitle   String?          @map("active_window_title")
+  activeApp           String?          @map("active_app")
+  keyboardEventsCount Int              @default(0) @map("keyboard_events_count")
+  mouseEventsCount    Int              @default(0) @map("mouse_events_count")
+  sizeBytes           Int?             @map("size_bytes")
+  blurred             Boolean          @default(false)
+  status              ScreenshotStatus @default(pending)
+  deletedAt           DateTime?        @map("deleted_at")
+  createdAt           DateTime         @default(now()) @map("created_at")
+
+  timeEntry TimeEntry @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+
+  @@index([timeEntryId, capturedAt])
+  @@index([status, createdAt])
+  @@map("screenshots")
+}
+
+enum ScreenshotStatus {
+  pending
+  uploaded
+  processed
+  failed
+}

@@ -70,7 +70,7 @@ model User {
   devices     Device[]
   assignments ProjectAssignment[]
   timeEntries TimeEntry[]
-  sessions    Session[]
+  tokens      Token[]
 
   @@map("users")
 }
@@ -119,32 +119,44 @@ model Invitation {
   @@map("invitations")
 }
 
-model Session {
-  id        String   @id
-  userId    String   @map("user_id")
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  userAgent String?  @map("user_agent")
-  ipAddress String?  @map("ip_address")
+model Token {
+  id         String    @id
+  userId     String    @map("user_id")
+  kind       TokenKind
+  tokenHash  String    @unique @map("token_hash")
+  deviceId   String?   @unique @map("device_id")   // set only when kind = device
+  expiresAt  DateTime? @map("expires_at")           // null for device tokens (no expiry by time)
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  revokedAt  DateTime? @map("revoked_at")
+  userAgent  String?   @map("user_agent")
+  ipAddress  String?   @map("ip_address")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@map("sessions")
+  @@index([kind, revokedAt])
+  @@map("tokens")
+}
+
+enum TokenKind {
+  web
+  device
 }
 
 model Device {
-  id         String   @id
-  userId     String   @map("user_id")
-  deviceName String   @map("device_name")
+  id         String    @id
+  userId     String    @map("user_id")
+  deviceName String    @map("device_name")
   os         String
-  appVersion String   @map("app_version")
-  tokenHash  String   @unique @map("token_hash")
+  appVersion String    @map("app_version")
   lastSeenAt DateTime? @map("last_seen_at")
-  createdAt  DateTime @default(now()) @map("created_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
   revokedAt  DateTime? @map("revoked_at")
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       Token?
   timeEntries TimeEntry[]
 
   @@index([userId])
@@ -263,6 +275,21 @@ model AuditLog {
 - `audit_logs(org_id, created_at)` — admin audit views.
 - `memberships(org_id, user_id)` UNIQUE — prevents duplicate memberships, supports "is this user in this org?" lookups.
 
+### Reporting access patterns
+
+- **Time totals** (`GET /orgs/:orgId/reports/time-totals`) runs
+  `prisma.timeEntry.groupBy({ by: ['userId', 'projectId'] })` filtered by
+  `project.orgId` and an optional `startedAt` window. The composite indexes
+  `time_entries(user_id, started_at)` and `time_entries(project_id, started_at)`
+  already cover the range filter; the group-by itself is a small in-memory
+  aggregation. No new index needed.
+- **Earned-money calculation** reads `project_assignments.hourly_rate_cents`
+  for each `(projectId, userId)` pair present in the aggregation. We use the
+  _current_ (or last-known) rate per assignment; rate history is not modelled
+  in v1. If billing-grade rate-history is needed, a separate
+  `assignment_rate_history` table becomes required — see Plan 09 for the
+  decision record.
+
 ## Things deliberately not in the schema
 
 - **No `passwords` table.** Hash lives on the `users` row.
@@ -270,10 +297,12 @@ model AuditLog {
 - **No `team` or `group` table.** Projects are the unit of grouping.
 - **No `tags` on screenshots.** YAGNI.
 - **No `comments`.** Same.
+- **No separate `sessions` table.** Web logins and desktop devices both authenticate with bearer tokens; both kinds live in the unified `tokens` table, distinguished by `kind`.
 
 ## Retention
 
 A scheduled worker runs daily and:
+
 1. Hard-deletes `screenshots` rows where `deleted_at < now() - 30d`.
 2. Hard-deletes screenshot objects from R2 for the same set.
 3. Archives `audit_logs` older than 1 year to cold storage (deferred).

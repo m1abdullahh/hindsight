@@ -8,23 +8,24 @@
 │   (Tauri, Win/Mac)  │         │   (React + Vite)    │
 └──────────┬──────────┘         └──────────┬──────────┘
            │                               │
-           │ HTTPS (device token)          │ HTTPS (session cookie)
+           │ HTTPS (bearer token)          │ HTTPS (bearer token)
            │                               │
            └───────────┬───────────────────┘
                        │
                        ▼
             ┌──────────────────────┐
             │   API Server         │
-            │   (Fastify + TS)     │
+            │   (Express + TS)     │
             └──────────┬───────────┘
                        │
         ┌──────────────┼──────────────┐
         │              │              │
         ▼              ▼              ▼
    ┌─────────┐   ┌──────────┐   ┌──────────┐
-   │Postgres │   │  Redis   │   │   R2     │
-   │(metadata│   │(sessions,│   │(screen-  │
-   │ + auth) │   │  queues) │   │ shots)   │
+   │ Neon    │   │ Upstash  │   │   R2     │
+   │Postgres │   │  Redis   │   │(screen-  │
+   │(metadata│   │(tokens,  │   │ shots)   │
+   │ + auth) │   │  queues) │   │          │
    └─────────┘   └──────────┘   └──────────┘
                        │
                        ▼
@@ -70,14 +71,17 @@
 
 ## Deployment
 
-- **Single VPS (Hetzner CX22 or DO equivalent, ~$10–20/mo)** for API + Postgres + Redis + worker, all via Docker Compose. Vertical scale until something hurts.
-- **Cloudflare R2** for object storage. Zero egress fees matter when admins scroll through screenshots.
-- **Cloudflare in front** for DNS, TLS, CDN of static web assets.
-- **Backups:** nightly `pg_dump` to a separate R2 bucket, 30-day retention.
+- **Serverless cloud services** for the stateful pieces — **Neon** for Postgres, **Upstash** for Redis, **Cloudflare R2** for object storage. No self-hosted DB or queue.
+- **API + worker** run on a serverless host (Railway / Fly.io / Render — picked when the deploy plan lands). One process for the API, one for the worker; both read the same Neon + Upstash URLs.
+- **Cloudflare** in front for DNS, TLS, and CDN of static web assets.
+- **Backups:** Neon's point-in-time recovery on the paid tier; periodic `pg_dump` to R2 for a cold archive.
+- **Local dev** uses the same Neon + Upstash URLs (a personal "dev" Neon branch keeps state isolated from prod). No Docker.
 
 ## What we explicitly didn't do
 
-- **No Kubernetes.** A compose file beats a cluster at this scale.
+- **No self-hosted Postgres or Redis.** Neon + Upstash remove an entire ops surface.
+- **No Docker Compose for local dev.** The serverless free tiers cover personal dev cleanly.
+- **No Kubernetes.** Out of scope at this scale.
 - **No microservices.** One backend service.
 - **No GraphQL.** REST + TanStack Query covers it; GraphQL adds machinery we don't need.
 - **No event sourcing.** Plain CRUD with an audit log table.
@@ -85,6 +89,7 @@
 
 ## Scaling escape hatches (when, not if)
 
-- If Postgres becomes hot: read replica for the dashboard queries, primary for writes.
-- If the worker falls behind: horizontal scale on the worker container; queue is already in Redis.
+- If Postgres becomes hot: Neon supports read replicas on its paid tiers; route dashboard queries to a replica and writes to the primary.
+- If the worker falls behind: horizontal scale on the worker process; queue is already in Upstash Redis.
+- If Neon's quota becomes a problem: the schema is portable, so a managed RDS / self-hosted Postgres is a one-`DATABASE_URL` swap.
 - If a single org gets huge: that's when `org_id`-based partitioning becomes interesting.

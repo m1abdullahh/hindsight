@@ -1,10 +1,10 @@
 # 09 — Privacy & Ethics
 
-> A monitoring tool sits on a sharp ethical edge. Decisions here are *product* decisions, not afterthoughts. This doc records what we will and will not do, and why.
+> A monitoring tool sits on a sharp ethical edge. Decisions here are _product_ decisions, not afterthoughts. This doc records what we will and will not do, and why.
 
 ## Principles
 
-1. **Visible always.** The tracked user always knows when they're being recorded. Tray icon, in-app banner, optional capture flash. Surreptitious tracking is not a feature we will ever ship.
+1. **Visible always.** The tracked user always knows when they're being recorded. Tray icon, in-app banner, **and a native OS toast on every successful capture** (titled "Hindsight / Screenshot captured"). Surreptitious tracking is not a feature we will ever ship. The OS toast is intentionally not silenceable from the app — if the user wants to mute them, they do so through OS-level notification settings, which is a deliberate, audited action on their end.
 
 2. **Content of input is never captured.** We log counts of keystrokes and mouse events, never the keys, characters, positions, or timing.
 
@@ -20,47 +20,47 @@
 
 ## What we capture
 
-| Data | Captured? | Notes |
-|---|---|---|
-| Screenshots of all monitors | Yes, while tracking is active | One image per monitor per window |
-| Active window title | Yes | Stored on screenshot row |
-| Active app name | Yes | |
-| Keystroke counts (per window) | Yes | Numeric only |
-| Mouse event counts (per window) | Yes | Numeric only |
-| Idle duration | Yes | Whole-window granularity |
-| URL of active browser tab | **No** | Out of scope; revisit only with explicit per-org opt-in |
-| Keystroke contents | **Never** | |
-| Clipboard contents | **Never** | |
-| Audio | **Never** | |
-| Webcam | **Never** | |
-| Files on disk | **Never** | |
-| Network traffic | **Never** | |
-| GPS / location | **Never** | |
+| Data                            | Captured?                     | Notes                                                   |
+| ------------------------------- | ----------------------------- | ------------------------------------------------------- |
+| Screenshots of all monitors     | Yes, while tracking is active | One image per monitor per window                        |
+| Active window title             | Yes                           | Stored on screenshot row                                |
+| Active app name                 | Yes                           |                                                         |
+| Keystroke counts (per window)   | Yes                           | Numeric only                                            |
+| Mouse event counts (per window) | Yes                           | Numeric only                                            |
+| Idle duration                   | Yes                           | Whole-window granularity                                |
+| URL of active browser tab       | **No**                        | Out of scope; revisit only with explicit per-org opt-in |
+| Keystroke contents              | **Never**                     |                                                         |
+| Clipboard contents              | **Never**                     |                                                         |
+| Audio                           | **Never**                     |                                                         |
+| Webcam                          | **Never**                     |                                                         |
+| Files on disk                   | **Never**                     |                                                         |
+| Network traffic                 | **Never**                     |                                                         |
+| GPS / location                  | **Never**                     |                                                         |
 
 ## When we don't capture
 
 - Tracking is paused.
 - App is quit.
-- User is in the IDLE state past threshold *(captures pause until they return and resolve the prompt)*.
-- The active window is on a screen flagged as private *(future feature; not v1)*.
+- User is in the IDLE state past threshold _(captures pause until they return and resolve the prompt)_.
+- The active window is on a screen flagged as private _(future feature; not v1)_.
 
 ## Member rights
 
 - **See your data.** Same dashboards as admins, scoped to self.
 - **Delete recent screenshots.** Default 5-minute grace window after capture; deletion is irreversible after that.
 - **Stop tracking, immediately, always.** No "pause requires manager approval" mode. We won't build that.
-- **Export your data.** A "download my data" button generates a ZIP of metadata and screenshot URLs. *(Required for GDPR-style requests; build by v1.1.)*
+- **Export your data.** A "download my data" button generates a ZIP of metadata and screenshot URLs. _(Required for GDPR-style requests; build by v1.1.)_
 - **Know who looked at what.** Audit log entries for screenshot views are deferred to v1.1 but reserved in the schema.
 
 ## Admin responsibilities (enforced or surfaced)
 
 - Project privacy setting (`blurScreenshots`) is a first-class field, surfaced when creating a project.
 - Audit log shows every member-management and screenshot-deletion action.
-- An "Org privacy settings" page consolidates: retention period, default blur, idle threshold, capture-flash policy. *(v1.0 may use defaults only; the page lands in v1.1.)*
+- An "Org privacy settings" page consolidates: retention period, default blur, idle threshold, capture-flash policy. _(v1.0 may use defaults only; the page lands in v1.1.)_
 
 ## Legal posture
 
-We are not lawyers. The tool has to be *deployable* by an org that is itself responsible for legal compliance in their jurisdiction. To that end, we make compliance easier:
+We are not lawyers. The tool has to be _deployable_ by an org that is itself responsible for legal compliance in their jurisdiction. To that end, we make compliance easier:
 
 - **Disclosure surface.** A "What this app records" screen on first install, copyable text in admin docs to use in employment notices.
 - **Consent capture.** First-run accept flow with timestamp logged to the device record.

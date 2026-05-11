@@ -16,9 +16,42 @@
 
 ## Window structure
 
-- **Main window** — login, project picker, current timer, recent screenshots (the user's own).
-- **Tray icon** — always present when the app is running. Two states: idle, tracking. Right-click menu: Open, Pause, Stop, Quit.
-- **Capture flash** (optional, opt-in per user) — a small unobtrusive overlay or sound on each capture, so the user is *visibly* reminded recording is happening.
+- **Main window** — login, project picker, current timer, "My time" panel (per-project totals for the signed-in user).
+- **Tray icon** — always present when the app is running. Two states: idle, tracking. Right-click menu: Open, Stop, Quit.
+- **Capture notification** — a native OS toast titled "Hindsight / Screenshot captured" fires on every successful capture. This replaces the earlier "capture flash overlay" idea — the OS toast is unmistakable, consistent across both OSes, and doesn't require an always-on transparent overlay window.
+
+### "My time" panel
+
+A compact widget on the project-picker screen showing the signed-in user's
+tracked time per project. Source: `GET /orgs/:orgId/reports/time-totals` with
+no `userId` filter (the API auto-scopes members to themselves).
+
+- Toggle: **Today / Week / All** (default: Today).
+- Per row: project name + duration + earned $ (when the project's assignment
+  has an `hourlyRateCents` set).
+- One total line when more than one project is listed.
+- Lives in `apps/desktop/src/components/MyTimePanel.tsx`.
+
+### Today's-baseline tracker timer
+
+By design choice, the on-screen timer **does not reset to 00:00 on every Start**
+when the user has already tracked time on the picked project today. Instead:
+
+1. On Start, the desktop calls `GET /orgs/:orgId/reports/time-totals?projectId=…&from=<startOfToday>`
+   and saves the returned `totalActiveSeconds` as `baselineTodaySeconds` in
+   the session store.
+2. The TrackingScreen renders `formatElapsed(baselineTodaySeconds + sessionElapsed)`.
+3. On Stop, `baselineTodaySeconds` is cleared. The next session re-queries.
+
+This keeps the on-screen timer aligned with "how much have I worked on this
+project today" while keeping `TimeEntry.totalActiveSeconds` clean (each row
+only carries its own session's duration; the API aggregates).
+
+The query runs once at Start; we do not re-fetch during the session because
+multi-device parallel tracking would lead to flicker. If a second device
+starts tracking the same project concurrently, the on-screen total is
+"my view at session start"; the report data on the web will still aggregate
+correctly across both.
 
 ## State machine
 
@@ -62,6 +95,7 @@
 We hook OS-level input events but **only increment counters**. We never store key codes, characters, mouse positions, scroll amounts, or timing.
 
 Per capture, we record:
+
 - `keyboardEventsCount` — number of key-press events in the window
 - `mouseEventsCount` — sum of clicks + significant moves (debounced)
 
@@ -79,6 +113,7 @@ That's it. This bounds the worst-case ethical and legal exposure.
 ## Local outbox (SQLite)
 
 Schema:
+
 ```
 outbox_screenshots(
   id TEXT PRIMARY KEY,
@@ -102,6 +137,7 @@ outbox_time_entry_updates(
 ```
 
 Upload worker (in-app, background):
+
 1. Fetch oldest non-uploaded row with `next_attempt_at <= now`.
 2. `POST /screenshots/presign`.
 3. PUT bytes to R2.
@@ -112,9 +148,56 @@ Upload worker (in-app, background):
 ## Time entry sync
 
 The desktop drives time entry creation. On Start:
+
 1. App calls `POST /time-entries`. If offline, it creates a local row with a temp ID and queues the create.
 2. Subsequent `PATCH`es accumulate locally and replay.
 3. Screenshots reference the local time entry ID; on first successful sync, server returns the canonical ID and we rewrite outbox rows.
+
+### totalActiveSeconds flush cadence
+
+While tracking is active, the React TrackingScreen pushes elapsed seconds to
+the server every 60 seconds:
+
+```ts
+useEffect(() => {
+  if (!timeEntryId || !startedAt) return;
+  const start = new Date(startedAt).getTime();
+  const id = window.setInterval(() => {
+    const elapsed = Math.min(86_400, Math.floor((Date.now() - start) / 1000));
+    void apiPatch(
+      `/time-entries/${timeEntryId}`,
+      { totalActiveSeconds: elapsed },
+      crypto.randomUUID(),
+    ).catch(() => {});
+  }, 60_000);
+  return () => window.clearInterval(id);
+}, [timeEntryId, startedAt]);
+```
+
+Failures are swallowed; the final authoritative value goes out at Stop along
+with `endedAt`. Without this loop, the web report would show 0 for any
+in-progress session until the user clicked Stop.
+
+### Capture notifications (Windows AUMID)
+
+The Rust scheduler calls
+`app.notification().builder().title("Hindsight").body("Screenshot captured").show()`
+after each persisted capture (see `apps/desktop/src-tauri/src/scheduler.rs`).
+
+Windows attributes toast notifications to the **AppUserModelID (AUMID)** of
+the launching process unless the app sets its own. To avoid the toast being
+labelled "Windows PowerShell" (in `tauri dev`) or "cmd" (when launched from
+a shell), the app registers its AUMID at startup:
+
+1. `SetCurrentProcessExplicitAppUserModelID("app.hindsight.desktop")` —
+   tells Windows what identity to use for this process's notifications.
+2. Writes `HKCU\Software\Classes\AppUserModelId\app.hindsight.desktop` with
+   `DisplayName = "Hindsight"` and `IconUri` pointing at `icons/icon.ico`.
+
+Both steps live in `apps/desktop/src-tauri/src/win_aumid.rs`. They are
+idempotent and HKCU-scoped — no admin required. In a production
+installer-launched app the Start Menu shortcut already carries the AUMID,
+but the runtime registration is harmless and protects dev workflows.
 
 ## Auto-update
 
@@ -139,9 +222,9 @@ The desktop drives time entry creation. On Start:
 
 ## Build matrix
 
-| OS | Architectures | Installer |
-|---|---|---|
-| Windows 10/11 | x64, arm64 | `.msi` (signed) |
-| macOS 12+ | x64, arm64 (universal) | `.dmg` (signed + notarized) |
+| OS            | Architectures          | Installer                   |
+| ------------- | ---------------------- | --------------------------- |
+| Windows 10/11 | x64, arm64             | `.msi` (signed)             |
+| macOS 12+     | x64, arm64 (universal) | `.dmg` (signed + notarized) |
 
 Linux is not a target for v1.

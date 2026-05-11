@@ -13,19 +13,18 @@ For a one-paragraph elevator pitch, see [`01-overview.md`](./01-overview.md).
 If you're new to the project, read these in order. Each is short and self-contained.
 
 1. [`01-overview.md`](./01-overview.md) — what we're building and why
-2. [`02-glossary.md`](./02-glossary.md) — terms used everywhere (org, member, time entry, etc.)
-3. [`03-architecture.md`](./03-architecture.md) — system diagram, components, data flow
-4. [`04-tech-stack.md`](./04-tech-stack.md) — every technology choice and the reason for it
-5. [`05-data-model.md`](./05-data-model.md) — full database schema with relationships
-6. [`06-api-design.md`](./06-api-design.md) — REST conventions, endpoint catalog, auth model
-7. [`07-desktop-app.md`](./07-desktop-app.md) — Tauri app architecture, capture pipeline, offline queue
-8. [`08-screenshot-pipeline.md`](./08-screenshot-pipeline.md) — end-to-end flow from capture to admin view
-9. [`09-auth-and-permissions.md`](./09-auth-and-permissions.md) — sessions, device tokens, role checks
-10. [`10-privacy-and-ethics.md`](./10-privacy-and-ethics.md) — what we capture, what we never capture, user rights
-11. [`11-conventions.md`](./11-conventions.md) — code style, naming, error handling, testing
-12. [`12-environments-and-deploy.md`](./12-environments-and-deploy.md) — dev/staging/prod, secrets, deploy flow
-13. [`13-roadmap.md`](./13-roadmap.md) — what's built, what's next, what's deferred
-14. [`14-decisions/`](./14-decisions/) — Architecture Decision Records (ADRs)
+2. [`02-architecture.md`](./02-architecture.md) — system diagram, components, data flow
+3. [`03-tech-stack.md`](./03-tech-stack.md) — every technology choice and the reason for it
+4. [`04-data-model.md`](./04-data-model.md) — full database schema with relationships
+5. [`05-api-surface.md`](./05-api-surface.md) — REST conventions, endpoint catalog, auth model
+6. [`06-desktop-app.md`](./06-desktop-app.md) — Tauri app architecture, capture pipeline, offline queue
+7. [`07-screenshot-pipeline.md`](./07-screenshot-pipeline.md) — end-to-end flow from capture to admin view
+8. [`08-auth-and-permissions.md`](./08-auth-and-permissions.md) — sessions, device tokens, role checks
+9. [`09-privacy-and-ethics.md`](./09-privacy-and-ethics.md) — what we capture, what we never capture, user rights
+10. [`10-roadmap.md`](./10-roadmap.md) — what's built, what's next, what's deferred
+11. [`11-glossary.md`](./11-glossary.md) — terms used everywhere (org, member, time entry, etc.)
+
+Execution plans (one per shipped feature) live under [`../plans/`](../plans/) — read those when you want to know _how_ something was built, not just what it is.
 
 ## How to keep this folder useful
 

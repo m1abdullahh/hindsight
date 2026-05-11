@@ -1,0 +1,9 @@
+dist/
+node_modules/
+.env
+.env.local
+*.log
+
+# Tauri / Rust build artefacts
+src-tauri/target/
+src-tauri/Cargo.lock.tauri-build

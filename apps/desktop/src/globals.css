@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Option A — Minimal Utilitarian tokens for the desktop app.
+ * Mirrors apps/web/src/globals.css so primitives feel identical.
+ */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 225 16% 6%;
+    --card: 0 0% 100%;
+    --card-foreground: 225 16% 6%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 225 16% 6%;
+    --primary: 225 16% 6%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 11% 93%;
+    --secondary-foreground: 223 9% 25%;
+    --muted: 240 11% 95%;
+    --muted-foreground: 226 6% 45%;
+    --accent: 240 60% 60%;
+    --accent-foreground: 0 0% 100%;
+    --accent-soft: 240 71% 96%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --good: 142 76% 36%;
+    --warn: 31 91% 44%;
+    --border: 240 11% 93%;
+    --border-strong: 240 9% 90%;
+    --input: 240 9% 90%;
+    --ring: 240 60% 60%;
+    --ink2: 223 9% 25%;
+    --ink3: 226 6% 45%;
+    --ink4: 223 9% 69%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    font-family:
+      'Inter',
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      system-ui,
+      sans-serif;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings:
+      'rlig' 1,
+      'calc' 1,
+      'ss01' 1;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  /* Inputs / editable areas keep text selection. */
+  input,
+  textarea,
+  [contenteditable='true'] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+}
+
+@layer utilities {
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}
