@@ -71,10 +71,14 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Captures all attached monitors. Returns one `CapturedScreenshot` per monitor
-/// in index order. If a particular monitor fails (e.g. permission denied on a
-/// secondary display), it's logged and skipped — we don't fail the whole capture
-/// event. Returns an empty Vec if there are no displays at all.
+/// Captures all attached monitors. When multiple monitors are present we
+/// stitch them side-by-side into a single wide image so each capture event
+/// produces ONE screenshot (one row, one thumbnail) covering the whole
+/// workspace. Single-monitor setups produce a single image unchanged.
+///
+/// Failures on an individual monitor are logged and skipped; if at least one
+/// monitor was captured we proceed with what we have. If every monitor fails
+/// the function errors.
 pub fn capture_all() -> Result<Vec<CapturedScreenshot>, CaptureError> {
     let screens = Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
     if screens.is_empty() {
@@ -82,26 +86,61 @@ pub fn capture_all() -> Result<Vec<CapturedScreenshot>, CaptureError> {
     }
 
     let captured_at_ms = now_ms();
-    let mut out = Vec::with_capacity(screens.len());
+    let mut images: Vec<RgbaImage> = Vec::with_capacity(screens.len());
     for (idx, screen) in screens.iter().enumerate() {
-        let image = match screen.capture() {
-            Ok(img) => img,
+        match screen.capture() {
+            Ok(img) => images.push(img),
             Err(e) => {
                 tracing::warn!(monitor = idx, err = %e, "monitor capture failed; skipping");
-                continue;
             }
-        };
-        match encode_one(image, idx as u32, captured_at_ms) {
-            Ok(shot) => out.push(shot),
-            Err(e) => tracing::warn!(monitor = idx, err = %e, "monitor encode failed; skipping"),
         }
     }
 
-    if out.is_empty() {
+    if images.is_empty() {
         return Err(CaptureError::CaptureFailed(
             "all monitor captures failed".into(),
         ));
     }
-    Ok(out)
+
+    // Single monitor: encode as-is (no stitching overhead).
+    if images.len() == 1 {
+        let img = images.into_iter().next().expect("len checked above");
+        return Ok(vec![encode_one(img, 0, captured_at_ms)?]);
+    }
+
+    // Multi-monitor: lay out left-to-right in capture order. Heights are
+    // unified by padding shorter monitors with black at the bottom so none of
+    // the images are scaled or distorted.
+    let stitched = stitch_horizontally(&images);
+    Ok(vec![encode_one(stitched, 0, captured_at_ms)?])
+}
+
+/// Composes `images` into a single RgbaImage placed side-by-side. The output
+/// height is `max(image.height())`; any image shorter than that is left at
+/// its original height and the unused area below is black (alpha 255).
+fn stitch_horizontally(images: &[RgbaImage]) -> RgbaImage {
+    let total_width: u32 = images.iter().map(|i| i.width()).sum();
+    let max_height: u32 = images.iter().map(|i| i.height()).max().unwrap_or(0);
+
+    // Start with an opaque black canvas so missing strips read as black bars
+    // rather than transparent (JPEG drops alpha anyway, so transparent would
+    // become white).
+    let mut canvas = RgbaImage::from_pixel(
+        total_width,
+        max_height,
+        screenshots::image::Rgba([0, 0, 0, 255]),
+    );
+
+    let mut x_offset: u32 = 0;
+    for img in images {
+        for y in 0..img.height() {
+            for x in 0..img.width() {
+                let p = *img.get_pixel(x, y);
+                canvas.put_pixel(x_offset + x, y, p);
+            }
+        }
+        x_offset += img.width();
+    }
+    canvas
 }
 

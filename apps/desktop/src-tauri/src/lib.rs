@@ -50,6 +50,46 @@ fn set_tracking(
     state.0.send(tracking).map_err(|e| e.to_string())
 }
 
+/// Shows a Windows toast notifying the user they just returned from idle.
+/// Uses our AUMID directly so it shows "Hindsight" as the source even in dev.
+/// The actual Keep/Discard buttons live in the inline banner inside the app —
+/// this toast is just a heads-up since the user is usually somewhere else
+/// (browser, other app) when they come back from being away.
+#[tauri::command]
+fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_winrt_notification::Toast;
+        let label = format_idle_duration(idle_seconds);
+        Toast::new("app.hindsight.desktop")
+            .title("Hindsight")
+            .text1(&format!("You were idle for {}", label))
+            .text2("Open Hindsight to keep or discard this time.")
+            .show()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = idle_seconds;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn format_idle_duration(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else {
+        let m = seconds / 60;
+        let s = seconds % 60;
+        if s == 0 {
+            format!("{}m", m)
+        } else {
+            format!("{}m {}s", m, s)
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -77,6 +117,7 @@ pub fn run() {
             set_device_token,
             clear_device_token,
             set_tracking,
+            show_idle_resume_toast,
         ])
         .setup(move |app| {
             // 1. Device-token store (Credential Manager / Keychain).
@@ -142,7 +183,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "stop" => {
-                let _ = app.emit("tray.stop", ());
+                let _ = app.emit("tray-stop", ());
             }
             _ => {}
         })

@@ -2,6 +2,7 @@ import type { ProjectDto } from '@hindsight/shared/dto';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
+  AlertCircle,
   LogOut,
   Pause as PauseIcon,
   Play as PlayIcon,
@@ -27,7 +28,8 @@ import { session } from '@/lib/session-store';
 
 declare const __APP_VERSION__: string;
 
-const IDLE_THRESHOLD_SECONDS = 300;
+// Fallback threshold when no project is loaded (e.g. between sessions).
+const DEFAULT_IDLE_THRESHOLD_SECONDS = 300;
 
 // Silent error swallow for fire-and-forget API calls (periodic flush, etc.).
 // Lifting this to a module constant satisfies no-empty-function without
@@ -296,22 +298,83 @@ function TrackTab({
     return () => window.clearInterval(id);
   }, [tracking, timeEntryId, startedAt, activeSec, computeIdleSeconds]);
 
-  // OS idle detection
+  // Per-project idle threshold (falls back to default when no project loaded).
+  const idleThresholdSec = currentProject
+    ? Math.max(60, currentProject.idleTimeoutMinutes * 60)
+    : DEFAULT_IDLE_THRESHOLD_SECONDS;
+
+  // Pending idle prompt: seconds the user just spent idle, awaiting Keep/Discard.
+  const [pendingIdleSec, setPendingIdleSec] = useState<number | null>(null);
+
+  // OS idle detection — pauses on idle, prompts to keep/discard on resume.
+  // Also propagates the pause state to the native scheduler so screenshot
+  // capture suspends along with time tracking.
   useEffect(() => {
     if (!tracking) return;
-    const unlistenPromise = listen<{ idle_seconds: number }>('activity.changed', (e) => {
+
+    console.log('[idle] listener armed, threshold =', idleThresholdSec, 's');
+    const unlistenPromise = listen<{ idle_seconds: number }>('activity-changed', (e) => {
       const idle = e.payload.idle_seconds;
-      const { pauseReason: reason } = session.getState();
-      if (idle >= IDLE_THRESHOLD_SECONDS && reason === null) {
+      const { pauseReason: reason, timeEntryId: teId, currentProject: proj } = session.getState();
+
+      console.log('[idle] event idle=', idle, 's reason=', reason, 'threshold=', idleThresholdSec);
+      if (idle >= idleThresholdSec && reason === null) {
+        console.log('[idle] -> pausing session');
         pauseSession('idle');
-      } else if (idle < IDLE_THRESHOLD_SECONDS && reason === 'idle') {
+        if (teId && proj) {
+          void invoke('set_tracking', {
+            tracking: {
+              time_entry_id: teId,
+              interval_minutes: proj.screenshotIntervalMinutes,
+              paused: true,
+            },
+          });
+        }
+      } else if (idle < idleThresholdSec && reason === 'idle') {
+        // Capture how long the just-ended idle block lasted before clearing
+        // the accrual cursor so the user can review it. Fire a Windows toast
+        // too — when the user returns from being away they're usually focused
+        // somewhere else, so the inline banner alone is easy to miss.
+        const startedAt = lastIdleAccrualAtRef.current;
+
+        console.log('[idle] -> resuming, startedAt=', startedAt);
+        if (startedAt !== null) {
+          const blockSec = Math.floor((Date.now() - startedAt) / 1000);
+
+          console.log('[idle] block was', blockSec, 'seconds, firing toast + banner');
+          if (blockSec > 0) {
+            setPendingIdleSec(blockSec);
+            void invoke('show_idle_resume_toast', { idleSeconds: blockSec }).catch((err) => {
+              console.warn('[idle] toast invoke failed', err);
+            });
+          }
+        }
         resumeSession();
+        if (teId && proj) {
+          void invoke('set_tracking', {
+            tracking: {
+              time_entry_id: teId,
+              interval_minutes: proj.screenshotIntervalMinutes,
+              paused: false,
+            },
+          });
+        }
       }
     });
     return () => {
       void unlistenPromise.then((u) => u());
     };
-  }, [tracking, pauseSession, resumeSession]);
+  }, [tracking, idleThresholdSec, pauseSession, resumeSession]);
+
+  const onKeepIdle = () => setPendingIdleSec(null);
+  const onDiscardIdle = () => {
+    // Remove the just-ended idle block from the accumulator so the server
+    // never sees it in totalIdleSeconds on the next flush.
+    if (pendingIdleSec !== null) {
+      idleSecondsRef.current = Math.max(0, idleSecondsRef.current - pendingIdleSec);
+    }
+    setPendingIdleSec(null);
+  };
 
   // Today's totals across all projects
   const todayQuery = useTodayTotalsForOrg(currentOrgId);
@@ -338,25 +401,33 @@ function TrackTab({
   }, [tracking, activeMs, pauseReason, todayQuery.totalToday]);
 
   const onStart = async () => {
-    const project = projects.find((p) => p.id === selectedId);
-    if (!project || starting || !currentOrgId) return;
+    const cached = projects.find((p) => p.id === selectedId);
+    if (!cached || starting || !currentOrgId) return;
     setStarting(true);
     try {
       const startedIso = new Date().toISOString();
-      const [entry, baseline] = await Promise.all([
+      // Re-fetch the project so per-project settings (interval, idle timeout,
+      // blur) are fresh — the projects list is only loaded on org change, so
+      // edits made in the web app since this desktop session started would
+      // otherwise be missed. Falls back to the cached row if the fetch fails.
+      const [entry, baseline, freshProject] = await Promise.all([
         apiPost<TimeEntryResponse>(
           '/time-entries',
-          { projectId: project.id, startedAt: startedIso },
+          { projectId: cached.id, startedAt: startedIso },
           crypto.randomUUID(),
         ),
-        fetchTodaySecondsForProject(currentOrgId, project.id),
+        fetchTodaySecondsForProject(currentOrgId, cached.id),
+        apiGet<ProjectDto>(`/projects/${cached.id}`).catch(() => cached),
       ]);
-      setProject(project);
+      // Keep the dropdown's cached row in sync so the picker also reflects
+      // any setting changes for next time.
+      setProjects((prev) => prev.map((p) => (p.id === freshProject.id ? freshProject : p)));
+      setProject(freshProject);
       startTracking(entry.id, entry.startedAt, baseline);
       await invoke('set_tracking', {
         tracking: {
           time_entry_id: entry.id,
-          interval_minutes: project.screenshotIntervalMinutes,
+          interval_minutes: freshProject.screenshotIntervalMinutes,
           paused: false,
         },
       });
@@ -424,7 +495,7 @@ function TrackTab({
   // Tray "Stop" event
   useEffect(() => {
     if (!tracking) return;
-    const unlistenPromise = listen('tray.stop', () => {
+    const unlistenPromise = listen('tray-stop', () => {
       void onStop();
     });
     return () => {
@@ -450,6 +521,11 @@ function TrackTab({
             </SelectContent>
           </Select>
         </div>
+      )}
+
+      {/* Idle resume prompt — Keep / Discard the just-ended idle block. */}
+      {pendingIdleSec !== null && (
+        <IdleResumePrompt seconds={pendingIdleSec} onKeep={onKeepIdle} onDiscard={onDiscardIdle} />
       )}
 
       {/* Timer block */}
@@ -610,6 +686,48 @@ function TrackTab({
         <ActivityBar segments={segments} height={22} />
       </div>
     </>
+  );
+}
+
+function IdleResumePrompt({
+  seconds,
+  onKeep,
+  onDiscard,
+}: {
+  seconds: number;
+  onKeep: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <div className="mx-4 mt-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12.5px] font-medium text-foreground">
+            You were idle for {formatHoursShort(seconds)}
+          </div>
+          <p className="mt-0.5 text-[11.5px] text-ink3">
+            Keep the idle time on this entry, or discard it so it doesn&apos;t count.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={onDiscard}
+              className="inline-flex h-7 items-center rounded-md border border-border-strong bg-card px-2.5 text-[12px] font-medium hover:bg-muted"
+            >
+              Discard idle
+            </button>
+            <button
+              type="button"
+              onClick={onKeep}
+              className="inline-flex h-7 items-center rounded-md bg-foreground px-2.5 text-[12px] font-medium text-background hover:opacity-90"
+            >
+              Keep
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

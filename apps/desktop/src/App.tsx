@@ -65,9 +65,10 @@ export function App() {
     };
   }, [setLoggedIn]);
 
-  // Subscribe to outbox.changed events from Rust.
+  // Subscribe to outbox-changed events from Rust. Tauri 2 rejects `.` in
+  // event names so we use a dash.
   useEffect(() => {
-    const unlistenPromise = listen<{ pending: number }>('outbox.changed', (e) => {
+    const unlistenPromise = listen<{ pending: number }>('outbox-changed', (e) => {
       setPendingUploads(e.payload.pending);
     });
     return () => {

@@ -5,6 +5,7 @@ use rand::Rng;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
+#[cfg(not(target_os = "windows"))]
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::watch;
 use tokio::time::{sleep_until, Instant};
@@ -156,15 +157,37 @@ async fn persist_capture(
     Ok(())
 }
 
+#[cfg_attr(target_os = "windows", allow(unused_variables))]
 fn notify_capture(app: &AppHandle) {
-    if let Err(e) = app
-        .notification()
-        .builder()
-        .title("Hindsight")
-        .body("Screenshot captured")
-        .show()
+    // On Windows we go straight to tauri-winrt-notification with our AUMID.
+    // tauri-plugin-notification deliberately skips setting the AUMID when the
+    // exe is under target/debug or target/release, which makes Windows
+    // attribute dev-mode toasts to PowerShell. Calling the underlying lib
+    // directly with our registered AUMID fixes that.
+    #[cfg(target_os = "windows")]
     {
-        tracing::warn!(err = %e, "failed to show capture notification");
+        use tauri_winrt_notification::Toast;
+        if let Err(e) = Toast::new("app.hindsight.desktop")
+            .title("Hindsight")
+            .text1("Screenshot captured")
+            .show()
+        {
+            tracing::warn!(err = %e, "failed to show capture notification (winrt)");
+        }
+        return;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Err(e) = app
+            .notification()
+            .builder()
+            .title("Hindsight")
+            .body("Screenshot captured")
+            .show()
+        {
+            tracing::warn!(err = %e, "failed to show capture notification");
+        }
     }
 }
 
@@ -174,7 +197,7 @@ pub async fn emit_outbox_changed(app: &AppHandle, db: &SqlitePool) {
             .fetch_one(db)
             .await
             .unwrap_or(0);
-    let _ = app.emit("outbox.changed", serde_json::json!({ "pending": pending }));
+    let _ = app.emit("outbox-changed", serde_json::json!({ "pending": pending }));
 }
 
 #[cfg(test)]
