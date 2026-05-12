@@ -8,7 +8,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model Organization {
@@ -102,15 +101,15 @@ enum TokenKind {
 }
 
 model Device {
-  id             String    @id
-  userId         String    @map("user_id")
-  deviceName     String    @map("device_name")
-  os             String
-  appVersion     String    @map("app_version")
-  lastSeenAt     DateTime? @map("last_seen_at")
-  presenceState  String?   @map("presence_state")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  revokedAt      DateTime? @map("revoked_at")
+  id            String    @id
+  userId        String    @map("user_id")
+  deviceName    String    @map("device_name")
+  os            String
+  appVersion    String    @map("app_version")
+  lastSeenAt    DateTime? @map("last_seen_at")
+  presenceState String?   @map("presence_state")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  revokedAt     DateTime? @map("revoked_at")
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   token       Token?
