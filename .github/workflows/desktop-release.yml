@@ -44,6 +44,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             libxdo-dev \
+            libxss-dev \
             libssl-dev \
             build-essential \
             file \
