@@ -6,7 +6,7 @@ import type {
   UserDto,
 } from '@hindsight/shared/dto';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, createFileRoute } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -868,14 +868,6 @@ function MemberStatsPanel({
             )}
           </section>
         </div>
-
-        <footer className="border-t border-border px-5 py-3">
-          <Button asChild variant="outline" className="h-8 w-full text-[12.5px]">
-            <Link to="/orgs/$orgId/members/$userId" params={{ orgId, userId }}>
-              Open full profile →
-            </Link>
-          </Button>
-        </footer>
       </aside>
     </div>
   );
