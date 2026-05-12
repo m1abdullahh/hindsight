@@ -63,6 +63,9 @@
       'Segoe UI',
       system-ui,
       sans-serif;
+    /* Always reserve the gutter so pages don't shift horizontally when
+       content grows from "fits" to "overflows". */
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground;

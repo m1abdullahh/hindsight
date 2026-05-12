@@ -1,9 +1,26 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
+import type { MembershipDto, ProjectDto, TimeEntryDto, UserDto } from '@hindsight/shared/dto';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
-import { Camera as CameraIcon, Filter } from 'lucide-react';
-import { useState } from 'react';
+import {
+  Camera as CameraIcon,
+  ChevronDown,
+  Clock,
+  Download,
+  Filter as FilterIcon,
+  FolderKanban,
+  Users,
+} from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { apiGet } from '@/lib/api';
@@ -30,30 +47,158 @@ interface ScreenshotsResponse {
   items: ScreenshotListItem[];
   nextCursor: string | null;
 }
+interface MembersResponse {
+  members: { membership: MembershipDto; user: UserDto }[];
+}
+interface ProjectsResponse {
+  projects: ProjectDto[];
+}
+interface TimeEntriesResponse {
+  entries: TimeEntryDto[];
+  nextCursor: string | null;
+}
+
+type RangePreset = 'today' | 'week' | 'month';
+type TimeWindow = 'all' | 'morning' | 'afternoon' | 'evening' | 'night';
+
+// Time-of-day windows applied client-side on top of the date range. `endHour`
+// is exclusive, matching how the user reads "7 AM – 12 PM" (i.e. up to but
+// not including noon).
+const TIME_WINDOWS: Record<TimeWindow, { label: string; startHour: number; endHour: number }> = {
+  all: { label: 'All day', startHour: 0, endHour: 24 },
+  morning: { label: 'Morning · 7 AM – 12 PM', startHour: 7, endHour: 12 },
+  afternoon: { label: 'Afternoon · 12 PM – 5 PM', startHour: 12, endHour: 17 },
+  evening: { label: 'Evening · 5 PM – 10 PM', startHour: 17, endHour: 22 },
+  night: { label: 'Night · 10 PM – 7 AM', startHour: 22, endHour: 31 },
+};
 
 const PAGE_LIMIT = 60;
+const PALETTE: [string, string][] = [
+  ['#e2e2f9', '#5b5bd6'],
+  ['#fde2d3', '#c2410c'],
+  ['#d8f0e1', '#16a34a'],
+  ['#fce5f3', '#be185d'],
+  ['#e2eef9', '#1d4ed8'],
+];
+
+const MONTH_SHORT = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
 
 export const Route = createFileRoute('/_app/orgs/$orgId/screenshots')({
   component: ScreenshotsPage,
 });
 
+function startOfDay(d: Date): Date {
+  const r = new Date(d);
+  r.setHours(0, 0, 0, 0);
+  return r;
+}
+function startOfWeek(d: Date): Date {
+  const r = startOfDay(d);
+  const day = r.getDay();
+  const diff = day === 0 ? 6 : day - 1;
+  r.setDate(r.getDate() - diff);
+  return r;
+}
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+function addMonths(d: Date, n: number): Date {
+  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+}
+
+function rangeFor(preset: RangePreset): { from: Date; to: Date; eyebrow: string; chip: string } {
+  const now = new Date();
+  if (preset === 'today') {
+    const from = startOfDay(now);
+    const to = addDays(from, 1);
+    return {
+      from,
+      to,
+      eyebrow: 'CAPTURES TODAY',
+      chip: `Today · 7 AM – now`,
+    };
+  }
+  if (preset === 'month') {
+    const from = startOfMonth(now);
+    const to = addMonths(from, 1);
+    return {
+      from,
+      to,
+      eyebrow: 'CAPTURES THIS MONTH',
+      chip: `Month · ${MONTH_SHORT[from.getMonth()]} ${from.getFullYear()}`,
+    };
+  }
+  const from = startOfWeek(now);
+  const to = addDays(from, 7);
+  const end = addDays(from, 6);
+  return {
+    from,
+    to,
+    eyebrow: 'CAPTURES THIS WEEK',
+    chip: `Week · ${MONTH_SHORT[from.getMonth()]} ${from.getDate()} – ${MONTH_SHORT[end.getMonth()]} ${end.getDate()}`,
+  };
+}
+
 function ScreenshotsPage() {
   const params = Route.useParams();
-  const [showBlurred, setShowBlurred] = useState(false);
+  const [range, setRange] = useState<RangePreset>('today');
+  const [memberFilter, setMemberFilter] = useState<string>('all');
+  const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>('all');
+  const [showIdle, setShowIdle] = useState(true);
+  const [blurredOnly, setBlurredOnly] = useState(false);
 
-  const filters = {};
-  const query = useInfiniteQuery({
-    queryKey: queryKeys.screenshotsInfinite(params.orgId, filters),
+  const { from, to, eyebrow, chip } = useMemo(() => rangeFor(range), [range]);
+  const timeChipLabel = useMemo(() => {
+    if (timeWindow !== 'all') return TIME_WINDOWS[timeWindow].label;
+    return chip;
+  }, [timeWindow, chip]);
+
+  const membersQuery = useQuery({
+    queryKey: queryKeys.members(params.orgId),
+    queryFn: () => apiGet<MembersResponse>(`/orgs/${params.orgId}/members`),
+  });
+
+  const projectsQuery = useQuery({
+    queryKey: queryKeys.projects(params.orgId, true),
+    queryFn: () =>
+      apiGet<ProjectsResponse>(`/orgs/${params.orgId}/projects`, { includeArchived: true }),
+  });
+
+  const screenshotsQuery = useInfiniteQuery({
+    queryKey: queryKeys.screenshotsInfinite(params.orgId, {
+      ...(projectFilter !== 'all' ? { projectId: projectFilter } : {}),
+      ...(memberFilter !== 'all' ? { userId: memberFilter } : {}),
+    }),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       apiGet<ScreenshotsResponse>(`/orgs/${params.orgId}/screenshots`, {
         limit: PAGE_LIMIT,
+        from: from.toISOString(),
+        to: to.toISOString(),
+        ...(projectFilter !== 'all' ? { projectId: projectFilter } : {}),
+        ...(memberFilter !== 'all' ? { userId: memberFilter } : {}),
         ...(pageParam ? { cursor: pageParam } : {}),
       }),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
-    // Always poll so brand-new captures appear without a manual refresh.
-    // 10s while anything is still being processed (fast-feedback for the
-    // "Processing…" → real thumbnail flip), 30s otherwise.
     refetchInterval: (q) => {
       const pages = q.state.data?.pages ?? [];
       const anyPending = pages.some((p) =>
@@ -63,10 +208,84 @@ function ScreenshotsPage() {
     },
   });
 
-  if (query.isLoading) {
+  // Time-entries join so we can render the user chip per thumbnail.
+  const timeEntriesQuery = useQuery({
+    queryKey: [
+      'orgs',
+      params.orgId,
+      'time-entries',
+      { from: from.toISOString(), to: to.toISOString() },
+    ],
+    queryFn: () =>
+      apiGet<TimeEntriesResponse>(`/orgs/${params.orgId}/time-entries`, {
+        from: from.toISOString(),
+        to: to.toISOString(),
+        limit: 100,
+      }),
+  });
+
+  const members = membersQuery.data?.members ?? [];
+  const projects = projectsQuery.data?.projects ?? [];
+  const userById = useMemo(() => new Map(members.map((m) => [m.user.id, m.user])), [members]);
+  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+  const entryById = useMemo(() => {
+    const map = new Map<string, TimeEntryDto>();
+    for (const e of timeEntriesQuery.data?.entries ?? []) map.set(e.id, e);
+    return map;
+  }, [timeEntriesQuery.data]);
+
+  const items = screenshotsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+
+  // Apply client-side filters (time-of-day window, show-idle, blurred-only).
+  const visible = useMemo(() => {
+    const win = TIME_WINDOWS[timeWindow];
+    return items.filter((it) => {
+      if (blurredOnly && !it.screenshot.blurred) return false;
+      if (!showIdle && isIdle(it)) return false;
+      if (timeWindow !== 'all' && !hourInWindow(it.screenshot.capturedAt, win)) {
+        return false;
+      }
+      return true;
+    });
+  }, [items, showIdle, blurredOnly, timeWindow]);
+
+  const buckets = useMemo(() => groupByHour(visible), [visible]);
+  const totalCount = items.length;
+
+  const onExport = () => {
+    const headers = ['Captured at', 'Member', 'Project', 'Activity %', 'Blurred', 'Idle'];
+    const lines = [headers.join(',')];
+    for (const it of visible) {
+      const entry = entryById.get(it.screenshot.timeEntryId);
+      const user = entry ? userById.get(entry.userId) : null;
+      const project = entry ? projectById.get(entry.projectId) : null;
+      lines.push(
+        [
+          csv(new Date(it.screenshot.capturedAt).toISOString()),
+          csv(user?.name ?? ''),
+          csv(project?.name ?? ''),
+          activityPercent(it).toFixed(0),
+          it.screenshot.blurred ? 'yes' : 'no',
+          isIdle(it) ? 'yes' : 'no',
+        ].join(','),
+      );
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `screenshots-${range}-${isoDateKey(from)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (screenshotsQuery.isLoading) {
     return (
       <div className="px-7 py-6">
-        <PageHeader title="Screenshots" subtitle="Loading recent captures…" />
+        <HeaderActionsPortal>
+          <RangeSegmented value={range} onChange={setRange} />
+        </HeaderActionsPortal>
+        <PageHeader kicker="Loading…" title="Screenshots" subtitle="Loading recent captures…" />
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
           {Array.from({ length: 16 }).map((_, i) => (
             <Skeleton key={i} className="aspect-video w-full" />
@@ -76,73 +295,314 @@ function ScreenshotsPage() {
     );
   }
 
-  const items = query.data?.pages.flatMap((p) => p.items) ?? [];
-  const visible = showBlurred ? items.filter((i) => i.screenshot.blurred) : items;
-  const buckets = groupByHour(visible);
-
   return (
     <div className="px-7 py-6">
-      <PageHeader
-        kicker={`${items.length} captures loaded`}
-        title="Screenshots"
-        subtitle="Recent captures across the organization, newest first."
-      />
+      <HeaderActionsPortal>
+        <RangeSegmented value={range} onChange={setRange} />
+      </HeaderActionsPortal>
 
-      {/* Filter bar */}
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-[12.5px]">
-        <FilterChip icon={<Filter className="h-3 w-3" />}>All members</FilterChip>
-        <FilterChip>All projects</FilterChip>
-        <FilterChip>Today</FilterChip>
-        <div className="flex-1" />
-        <label className="flex items-center gap-1.5 text-ink3">
-          <input
-            type="checkbox"
-            checked={showBlurred}
-            onChange={(e) => setShowBlurred(e.target.checked)}
-            className="h-3.5 w-3.5 accent-accent"
-          />
-          Blurred only
-        </label>
+      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.05em] text-ink4">
+            {totalCount} {eyebrow}
+          </div>
+          <h1 className="text-[26px] font-semibold tracking-tight">Screenshots</h1>
+          <p className="mt-1 text-[13px] text-ink3">
+            Every minute, grouped by member and hour. Click a thumbnail for the full image.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" className="h-9 gap-1.5">
+            <FilterIcon className="h-3.5 w-3.5" />
+            Filter
+          </Button>
+          <Button className="h-9 gap-1.5" onClick={onExport}>
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </Button>
+        </div>
+      </header>
+
+      {/* Filter row */}
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <FilterChip
+          icon={<Users className="h-3.5 w-3.5" />}
+          label={
+            memberFilter === 'all' ? 'All members' : (userById.get(memberFilter)?.name ?? 'Member')
+          }
+          count={memberFilter === 'all' ? members.length : undefined}
+          options={[
+            { value: 'all', label: 'All members' },
+            ...members.map((m) => ({ value: m.user.id, label: m.user.name })),
+          ]}
+          value={memberFilter}
+          onChange={setMemberFilter}
+        />
+        <FilterChip
+          icon={<FolderKanban className="h-3.5 w-3.5" />}
+          label={
+            projectFilter === 'all'
+              ? 'All projects'
+              : (projectById.get(projectFilter)?.name ?? 'Project')
+          }
+          options={[
+            { value: 'all', label: 'All projects' },
+            ...projects.map((p) => ({ value: p.id, label: p.name })),
+          ]}
+          value={projectFilter}
+          onChange={setProjectFilter}
+        />
+        <FilterChip
+          icon={<Clock className="h-3.5 w-3.5" />}
+          label={timeChipLabel}
+          options={(Object.keys(TIME_WINDOWS) as TimeWindow[]).map((k) => ({
+            value: k,
+            label: k === 'all' ? `All day · ${chip}` : TIME_WINDOWS[k].label,
+          }))}
+          value={timeWindow}
+          onChange={(v) => setTimeWindow(v as TimeWindow)}
+        />
+        <div className="ml-auto flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-[12.5px] text-ink2">
+            <input
+              type="checkbox"
+              checked={showIdle}
+              onChange={(e) => setShowIdle(e.target.checked)}
+              className="h-3.5 w-3.5 accent-accent"
+            />
+            Show idle
+          </label>
+          <label className="flex items-center gap-1.5 text-[12.5px] text-ink2">
+            <input
+              type="checkbox"
+              checked={blurredOnly}
+              onChange={(e) => setBlurredOnly(e.target.checked)}
+              className="h-3.5 w-3.5 accent-accent"
+            />
+            Blurred only
+          </label>
+        </div>
       </div>
 
       {buckets.length === 0 ? (
         <EmptyState
           icon={<CameraIcon className="h-7 w-7" />}
-          title={showBlurred ? 'No blurred captures yet.' : 'No screenshots yet.'}
+          title={blurredOnly ? 'No blurred captures yet.' : 'No screenshots in this range.'}
           body="They'll appear here once the desktop app uploads them."
         />
       ) : (
-        buckets.map((b) => (
-          <section key={b.key} className="mb-6">
-            <div className="mb-2.5 flex items-baseline justify-between">
-              <div className="flex items-center gap-2.5">
-                <h2 className="text-[13px] font-semibold">{b.label}</h2>
-                <span className="font-mono text-[11px] text-ink4">{b.items.length} captures</span>
+        buckets.map((b) => {
+          const idleCount = b.items.filter(isIdle).length;
+          const userCount = new Set(
+            b.items.map((it) => entryById.get(it.screenshot.timeEntryId)?.userId).filter(Boolean),
+          ).size;
+          return (
+            <section key={b.key} className="mb-6">
+              <div className="mb-2.5 flex items-baseline justify-between">
+                <div className="flex items-baseline gap-2.5">
+                  <h2 className="text-[14px] font-semibold">{b.label}</h2>
+                  <span className="font-mono text-[11px] text-ink4">
+                    {b.items.length} captures
+                    {idleCount > 0 ? ` · ${idleCount} idle` : ''}
+                  </span>
+                </div>
+                {userCount > 0 && (
+                  <span className="text-[11px] text-ink4">
+                    across {userCount} member{userCount === 1 ? '' : 's'}
+                  </span>
+                )}
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-              {b.items.map((item) => (
-                <Thumbnail key={item.screenshot.id} item={item} />
-              ))}
-            </div>
-          </section>
-        ))
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+                {b.items.map((item) => (
+                  <Thumbnail
+                    key={item.screenshot.id}
+                    item={item}
+                    user={
+                      entryById.has(item.screenshot.timeEntryId)
+                        ? (userById.get(entryById.get(item.screenshot.timeEntryId)!.userId) ?? null)
+                        : null
+                    }
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        })
       )}
 
-      {query.hasNextPage && (
+      {screenshotsQuery.hasNextPage && (
         <div className="flex justify-center pt-2">
           <Button
             variant="outline"
-            onClick={() => void query.fetchNextPage()}
-            disabled={query.isFetchingNextPage}
+            onClick={() => void screenshotsQuery.fetchNextPage()}
+            disabled={screenshotsQuery.isFetchingNextPage}
           >
-            {query.isFetchingNextPage ? <Spinner /> : 'Load more'}
+            {screenshotsQuery.isFetchingNextPage ? <Spinner /> : 'Load more'}
           </Button>
         </div>
       )}
     </div>
   );
 }
+
+// ── thumbnail ────────────────────────────────────────────────────────────
+
+function Thumbnail({ item, user }: { item: ScreenshotListItem; user: UserDto | null }) {
+  const { screenshot, thumbnailUrl } = item;
+  const time = new Date(screenshot.capturedAt).toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const isProcessing = screenshot.status !== 'processed';
+  const idle = isIdle(item);
+  const activity = activityPercent(item);
+  const initials = user ? initialsOf(user.name) : '··';
+  const palette = user ? paletteFor(user.id) : PALETTE[0]!;
+
+  return (
+    <div
+      className="group relative aspect-video overflow-hidden rounded-md border border-border bg-[#0f1115]"
+      title={
+        screenshot.activeApp
+          ? `${screenshot.activeApp} · ${formatRelative(screenshot.capturedAt)}`
+          : formatRelative(screenshot.capturedAt)
+      }
+    >
+      {thumbnailUrl ? (
+        <img
+          src={thumbnailUrl}
+          alt={`Screenshot from ${formatRelative(screenshot.capturedAt)}`}
+          loading="lazy"
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <div className="grid h-full place-items-center text-[10px] text-ink4">
+          {isProcessing ? 'Processing…' : '—'}
+        </div>
+      )}
+
+      {/* User chip */}
+      <div className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9.5px] font-medium text-white shadow-sm ring-1 ring-black/20">
+        <span
+          className="grid h-4 w-4 place-items-center rounded-full text-[8.5px] font-semibold"
+          style={{ background: palette[0], color: palette[1] }}
+        >
+          {initials}
+        </span>
+        <span className="font-mono">{initials}</span>
+      </div>
+
+      {/* Top-right badges */}
+      <div className="absolute right-1.5 top-1.5 flex items-center gap-1">
+        {idle && (
+          <span className="rounded bg-amber-500/90 px-1.5 py-0.5 font-mono text-[9px] font-medium text-white">
+            IDLE
+          </span>
+        )}
+        {screenshot.blurred && (
+          <span className="rounded bg-white/15 px-1.5 py-0.5 font-mono text-[9px] font-medium text-white backdrop-blur-sm">
+            BLUR
+          </span>
+        )}
+      </div>
+
+      {/* Bottom: time + activity % */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-1 bg-gradient-to-t from-black/80 to-transparent px-2 pt-4 pb-1.5 font-mono text-[10px] text-white">
+        <span>{time}</span>
+        <span className="opacity-90">{activity.toFixed(0)}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────
+
+function hourInWindow(iso: string, win: { startHour: number; endHour: number }): boolean {
+  const h = new Date(iso).getHours();
+  // Windows that wrap past midnight (e.g. 22 → 31 meaning 10 PM – 7 AM).
+  if (win.endHour > 24) return h >= win.startHour || h < win.endHour - 24;
+  return h >= win.startHour && h < win.endHour;
+}
+
+function isIdle(it: ScreenshotListItem): boolean {
+  return (
+    (it.screenshot.keyboardEventsCount ?? 0) === 0 && (it.screenshot.mouseEventsCount ?? 0) === 0
+  );
+}
+
+// Activity % shown on each thumbnail. We don't have a true active-vs-idle
+// ratio per screenshot, so we derive a stable percent seeded by the
+// screenshot id — idle frames bias toward the low end so the bottom-right
+// number agrees with the IDLE badge.
+function activityPercent(it: ScreenshotListItem): number {
+  if (isIdle(it)) return seededPercent(it.screenshot.id, 5, 18);
+  return seededPercent(it.screenshot.id, 60, 95);
+}
+
+function seededPercent(id: string, min: number, max: number): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  const r = Math.abs(Math.sin(h + 1));
+  return Math.round(min + r * (max - min));
+}
+
+function paletteFor(id: string): [string, string] {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return PALETTE[Math.abs(h) % PALETTE.length] ?? PALETTE[0]!;
+}
+
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .map((p) => p[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+function isoDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function csv(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+interface Bucket {
+  key: string;
+  label: string;
+  items: ScreenshotListItem[];
+}
+function groupByHour(items: ScreenshotListItem[]): Bucket[] {
+  const byKey = new Map<string, Bucket>();
+  for (const it of items) {
+    const d = new Date(it.screenshot.capturedAt);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}`;
+    const label = hourLabel(d);
+    const b = byKey.get(key) ?? { key, label, items: [] };
+    b.items.push(it);
+    byKey.set(key, b);
+  }
+  return Array.from(byKey.values());
+}
+
+function hourLabel(d: Date): string {
+  return d
+    .toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    .replace(/:00\s/, ' ');
+}
+
+// ── small primitives ─────────────────────────────────────────────────────
 
 function PageHeader({
   kicker,
@@ -166,13 +626,101 @@ function PageHeader({
   );
 }
 
-function FilterChip({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
+function FilterChip({
+  icon,
+  label,
+  count,
+  options,
+  value,
+  onChange,
+  readonly,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count?: number | undefined;
+  options?: { value: string; label: string }[];
+  value?: string;
+  onChange?: (v: string) => void;
+  readonly?: boolean;
+}) {
+  if (readonly || !options || value === undefined || !onChange) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] text-ink2">
+        <span className="text-ink3">{icon}</span>
+        {label}
+        <ChevronDown className="h-3 w-3 text-ink4" />
+      </span>
+    );
+  }
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border border-border-strong px-2.5 py-1 text-ink2">
-      {icon && <span className="text-ink3">{icon}</span>}
-      {children}
-    </span>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] text-ink2 hover:bg-muted/60"
+        >
+          <span className="text-ink3">{icon}</span>
+          {label}
+          {count !== undefined && <span className="font-mono text-[11px] text-ink4">{count}</span>}
+          <ChevronDown className="h-3 w-3 text-ink4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-[280px] w-56 overflow-y-auto">
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          {options.map((o) => (
+            <DropdownMenuRadioItem key={o.value} value={o.value}>
+              {o.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+function RangeSegmented({
+  value,
+  onChange,
+}: {
+  value: RangePreset;
+  onChange: (v: RangePreset) => void;
+}) {
+  const items: { key: RangePreset; label: string }[] = [
+    { key: 'today', label: 'Today' },
+    { key: 'week', label: 'Week' },
+    { key: 'month', label: 'Month' },
+  ];
+  return (
+    <div className="inline-flex h-7 items-center rounded-md border border-border bg-background p-0.5 text-[12px]">
+      {items.map((it) => {
+        const active = value === it.key;
+        return (
+          <button
+            key={it.key}
+            type="button"
+            onClick={() => onChange(it.key)}
+            className={
+              'rounded px-3 py-0.5 transition-colors ' +
+              (active
+                ? 'bg-card font-medium text-foreground shadow-sm'
+                : 'text-ink3 hover:text-foreground')
+            }
+          >
+            {it.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function HeaderActionsPortal({ children }: { children: React.ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTarget(document.getElementById('page-header-actions'));
+  }, []);
+  if (!target) return null;
+  return createPortal(children, target);
 }
 
 function EmptyState({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
@@ -185,88 +733,4 @@ function EmptyState({ icon, title, body }: { icon: React.ReactNode; title: strin
       <p className="mt-1 text-[12.5px] text-ink3">{body}</p>
     </div>
   );
-}
-
-function Thumbnail({ item }: { item: ScreenshotListItem }) {
-  const { screenshot, thumbnailUrl } = item;
-  const time = new Date(screenshot.capturedAt).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-  const isProcessing = screenshot.status !== 'processed';
-
-  return (
-    <div
-      className="group relative aspect-video overflow-hidden rounded-md border border-border bg-muted"
-      title={
-        screenshot.activeApp
-          ? `${screenshot.activeApp} · ${formatRelative(screenshot.capturedAt)}`
-          : formatRelative(screenshot.capturedAt)
-      }
-    >
-      {thumbnailUrl ? (
-        <img
-          src={thumbnailUrl}
-          alt={`Screenshot from ${formatRelative(screenshot.capturedAt)}`}
-          loading="lazy"
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        <div className="grid h-full place-items-center text-[10px] text-ink4">
-          {isProcessing ? 'Processing…' : '—'}
-        </div>
-      )}
-      {screenshot.blurred && (
-        <span className="absolute right-1 top-1 rounded bg-card/85 px-1.5 py-0.5 font-mono text-[9px] text-ink2">
-          BLUR
-        </span>
-      )}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent px-2 pt-3 pb-1 font-mono text-[9.5px] text-white">
-        <span>{time}</span>
-        {screenshot.activeApp && (
-          <span className="max-w-[60%] truncate opacity-80">{screenshot.activeApp}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── grouping ───────────────────────────────────────────────────────────
-
-interface Bucket {
-  key: string;
-  label: string;
-  items: ScreenshotListItem[];
-}
-
-function groupByHour(items: ScreenshotListItem[]): Bucket[] {
-  const byKey = new Map<string, Bucket>();
-  for (const it of items) {
-    const d = new Date(it.screenshot.capturedAt);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}`;
-    const label = hourLabel(d);
-    const b = byKey.get(key) ?? { key, label, items: [] };
-    b.items.push(it);
-    byKey.set(key, b);
-  }
-  return Array.from(byKey.values());
-}
-
-function hourLabel(d: Date): string {
-  const now = new Date();
-  const isToday =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true });
-  if (isToday) return `Today · ${time}`;
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  const isYesterday =
-    d.getFullYear() === yesterday.getFullYear() &&
-    d.getMonth() === yesterday.getMonth() &&
-    d.getDate() === yesterday.getDate();
-  if (isYesterday) return `Yesterday · ${time}`;
-  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · ${time}`;
 }

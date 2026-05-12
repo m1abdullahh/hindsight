@@ -225,7 +225,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="flex h-12 items-center gap-3.5 border-b border-border bg-card px-5">
-          <div className="text-[13px] text-ink3">
+          <div className="flex items-center gap-1 text-[13px] text-ink3">
             {currentOrg ? (
               <span>
                 {currentOrg.name}
@@ -235,6 +235,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             ) : (
               'Hindsight'
             )}
+            {/* Slot for an additional breadcrumb segment (e.g. project name on
+                the project detail page). Pages portal a node here that already
+                includes its leading separator. */}
+            <span id="page-breadcrumb-suffix" className="flex items-center" />
           </div>
           <div className="flex-1" />
           <div className="hidden h-7 w-[200px] items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-ink3 sm:flex">
@@ -242,8 +246,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span>Search…</span>
             <span className="ml-auto font-mono text-[10.5px]">⌘K</span>
           </div>
+          {/* Slot for page-specific header actions (e.g. "Invite member"). Pages
+              portal into this node via document.getElementById('page-header-actions'). */}
+          <div id="page-header-actions" className="flex items-center gap-2" />
         </header>
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto [scrollbar-gutter:stable]">{children}</main>
       </div>
     </div>
   );
