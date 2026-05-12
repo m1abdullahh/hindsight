@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
+import { ScreenshotDialog } from '@/components/screenshot-dialog';
 import { AvatarLive } from '@/components/ui/avatar-live';
 import { Button } from '@/components/ui/button';
 import {
@@ -527,6 +528,10 @@ function MemberStatsPanel({
   presence: PresenceEntryDto['state'];
   onClose: () => void;
 }) {
+  const queryClient = useQueryClient();
+  // Screenshot currently open in the full-image dialog; null = closed.
+  const [openShotId, setOpenShotId] = useState<string | null>(null);
+
   // Esc-to-close behavior, mounted once per open.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -843,9 +848,11 @@ function MemberStatsPanel({
             ) : (
               <div className="grid grid-cols-3 gap-1.5">
                 {screenshots.map((item) => (
-                  <div
+                  <button
                     key={item.screenshot.id}
-                    className="relative aspect-video overflow-hidden rounded border border-border bg-muted"
+                    type="button"
+                    onClick={() => setOpenShotId(item.screenshot.id)}
+                    className="group relative aspect-video w-full overflow-hidden rounded border border-border bg-muted text-left transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2"
                     title={
                       item.screenshot.activeApp
                         ? `${item.screenshot.activeApp} · ${formatRelative(item.screenshot.capturedAt)}`
@@ -862,13 +869,25 @@ function MemberStatsPanel({
                     ) : (
                       <div className="grid h-full place-items-center text-[10px] text-ink4">—</div>
                     )}
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
           </section>
         </div>
       </aside>
+
+      {openShotId && (
+        <ScreenshotDialog
+          screenshotId={openShotId}
+          onClose={() => setOpenShotId(null)}
+          invalidateOnDelete={() => {
+            queryClient.invalidateQueries({
+              queryKey: ['orgs', orgId, 'screenshots'],
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
