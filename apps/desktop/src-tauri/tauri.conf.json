@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3001 https://*.hindsight.app https://*.r2.cloudflarestorage.com"
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3001 https://*.hindsight.app https://*.onrender.com https://*.r2.cloudflarestorage.com"
     }
   },
   "bundle": {
