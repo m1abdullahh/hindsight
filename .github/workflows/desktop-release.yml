@@ -25,11 +25,29 @@ jobs:
           - platform: windows-latest
             rust-targets: ''
             tauri-args: ''
+          - platform: ubuntu-22.04
+            rust-targets: ''
+            tauri-args: ''
 
     runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            file \
+            wget
 
       - uses: pnpm/action-setup@v4
         with:
