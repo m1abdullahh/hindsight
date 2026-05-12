@@ -8,8 +8,8 @@
     "pnpm": ">=9"
   },
   "scripts": {
-    "dev": "concurrently -n api,worker,web -c blue,yellow,cyan \"pnpm --filter @hindsight/api dev\" \"pnpm --filter @hindsight/api worker\" \"pnpm --filter @hindsight/web dev\"",
-    "dev:full": "concurrently -n api,worker,web,desktop -c blue,yellow,cyan,magenta \"pnpm --filter @hindsight/api dev\" \"pnpm --filter @hindsight/api worker\" \"pnpm --filter @hindsight/web dev\" \"pnpm --filter @hindsight/desktop exec tauri dev\"",
+    "dev": "concurrently -n api,web -c blue,cyan \"pnpm --filter @hindsight/api dev\" \"pnpm --filter @hindsight/web dev\"",
+    "dev:full": "concurrently -n api,web,desktop -c blue,cyan,magenta \"pnpm --filter @hindsight/api dev\" \"pnpm --filter @hindsight/web dev\" \"pnpm --filter @hindsight/desktop exec tauri dev\"",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "eslint .",
