@@ -552,9 +552,15 @@ function MemberStatsPanel({
     return monday.toISOString();
   }, []);
 
+  // All queries below poll while the panel is open so cards stay live
+  // without a manual reload. Hot data (today, recent sessions, recent
+  // screenshots) polls every 30s; warmer data (week aggregates +
+  // per-session activity, all-time totals) every 60s. Closing the panel
+  // unmounts the queries so polling stops automatically.
   const allTotalsQuery = useQuery({
     queryKey: queryKeys.timeTotals(orgId, { userId }),
     queryFn: () => apiGet<TimeTotalsResponse>(`/orgs/${orgId}/reports/time-totals`, { userId }),
+    refetchInterval: 60_000,
   });
   const todayTotalsQuery = useQuery({
     queryKey: queryKeys.timeTotals(orgId, { userId, from: todayFrom }),
@@ -572,6 +578,7 @@ function MemberStatsPanel({
         userId,
         from: weekFromIso,
       }),
+    refetchInterval: 60_000,
   });
   const weekEntriesQuery = useQuery({
     queryKey: ['orgs', orgId, 'time-entries', { userId, from: weekFromIso }],
@@ -581,14 +588,17 @@ function MemberStatsPanel({
         from: weekFromIso,
         limit: 100,
       }),
+    refetchInterval: 60_000,
   });
   const recentEntriesQuery = useQuery({
     queryKey: ['orgs', orgId, 'time-entries', { userId, limit: 5 }],
     queryFn: () => apiGet<TimeEntriesResponse>(`/orgs/${orgId}/time-entries`, { userId, limit: 5 }),
+    refetchInterval: 30_000,
   });
   const screenshotsQuery = useQuery({
     queryKey: queryKeys.screenshots(orgId, { userId }),
     queryFn: () => apiGet<ScreenshotsResponse>(`/orgs/${orgId}/screenshots`, { userId, limit: 6 }),
+    refetchInterval: 30_000,
   });
 
   const allTotals = allTotalsQuery.data?.rows ?? [];
