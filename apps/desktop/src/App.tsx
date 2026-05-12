@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { Toaster } from './components/ui/toaster';
 import { WindowChrome } from './components/window-chrome';
 import { LoginScreen } from './screens/LoginScreen';
+import { PermissionGateScreen } from './screens/PermissionGateScreen';
 import { TrackerScreen } from './screens/TrackerScreen';
 import { ApiError, apiGet, clearTokenCache } from './lib/api';
 import { session } from './lib/session-store';
@@ -16,6 +17,10 @@ export function App() {
   const setLoggedIn = session((s) => s.setLoggedIn);
   const setPendingUploads = session((s) => s.setPendingUploads);
   const [booting, setBooting] = useState(true);
+  // OS permission gate (macOS Screen Recording). Starts false so that on
+  // Windows / X11 — where PermissionGateScreen reports granted immediately
+  // — we never show the gate at all.
+  const [permissionsOk, setPermissionsOk] = useState(false);
 
   usePresenceHeartbeat();
 
@@ -86,6 +91,8 @@ export function App() {
           </div>
         ) : stage === 'login' ? (
           <LoginScreen />
+        ) : !permissionsOk ? (
+          <PermissionGateScreen onGranted={() => setPermissionsOk(true)} />
         ) : (
           <TrackerScreen />
         )}

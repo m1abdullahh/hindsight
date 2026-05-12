@@ -10,6 +10,7 @@ mod auth;
 mod capture;
 mod db;
 mod idle_watcher;
+mod permissions;
 mod scheduler;
 mod uploader;
 #[cfg(target_os = "windows")]
@@ -75,6 +76,42 @@ fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Reports OS-level permission status for screen recording. On non-macOS
+/// platforms this always returns Granted so the renderer can skip the gate.
+#[tauri::command]
+fn check_screen_capture_permission() -> permissions::PermissionStatus {
+    permissions::check_screen_capture()
+}
+
+/// Triggers the macOS permission dialog (first call only). Returns the
+/// post-request status so the renderer can update its gate immediately.
+#[tauri::command]
+fn request_screen_capture_permission() -> permissions::PermissionStatus {
+    permissions::request_screen_capture()
+}
+
+/// Opens System Settings → Privacy & Security → Screen Recording. macOS only;
+/// no-op on other platforms. Useful when the user has previously denied and
+/// we can no longer trigger the OS dialog from inside the app.
+#[tauri::command]
+async fn open_screen_capture_settings(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_shell::ShellExt;
+        app.shell()
+            .open(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 fn format_idle_duration(seconds: u64) -> String {
     if seconds < 60 {
@@ -118,6 +155,9 @@ pub fn run() {
             clear_device_token,
             set_tracking,
             show_idle_resume_toast,
+            check_screen_capture_permission,
+            request_screen_capture_permission,
+            open_screen_capture_settings,
         ])
         .setup(move |app| {
             // 1. Device-token store (Credential Manager / Keychain).

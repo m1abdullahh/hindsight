@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Required by macOS 10.15+ before the OS allows the screencapture
+       APIs that the screenshots crate uses. Without this key the first
+       capture attempt silently fails and the user has no signal to grant
+       permission. -->
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Hindsight captures screenshots of your active workspace at the interval set by your project, to help your team review your tracked time. Only captures during a tracked session are recorded.</string>
+
+  <!-- App appears in the menu bar / dock; LSUIElement=false keeps it
+       visible (set to true later if you want a tray-only tracker). -->
+  <key>LSUIElement</key>
+  <false/>
+</dict>
+</plist>
