@@ -2,11 +2,12 @@ import type {
   InvitationDto,
   MembershipDto,
   PresenceEntryDto,
+  TimeEntryDto,
   UserDto,
 } from '@hindsight/shared/dto';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { MoreHorizontal, Plus, Search } from 'lucide-react';
+import { MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useForm } from 'react-hook-form';
@@ -55,8 +56,9 @@ import {
 } from '@/components/ui/table';
 import { useToast } from '@/components/ui/use-toast';
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api';
-import { formatRelative } from '@/lib/format';
+import { formatDateTime, formatHours, formatRelative } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
+import { projectAccent } from '@/lib/project-accent';
 import { queryKeys } from '@/lib/queries';
 import { useUser } from '@/lib/session-store';
 import { useCan } from '@/lib/use-can';
@@ -116,6 +118,8 @@ function MembersPage() {
   const canManage = useCan('members:manage');
   const currentUser = useUser();
   const [search, setSearch] = useState('');
+  // ID of the member whose stats sub-panel is currently open; null = closed.
+  const [statsUserId, setStatsUserId] = useState<string | null>(null);
 
   const membersQuery = useQuery({
     queryKey: queryKeys.members(params.orgId),
@@ -351,18 +355,25 @@ function MembersPage() {
                 const projectCount = stats?.projectCount ?? 0;
                 const isTracking = presence === 'active' || presence === 'idle';
                 return (
-                  <TableRow key={membership.id}>
+                  <TableRow
+                    key={membership.id}
+                    onClick={() => setStatsUserId(user.id)}
+                    className="cursor-pointer"
+                  >
                     <TableCell className="py-2.5 font-medium">
                       <div className="flex items-center gap-2.5">
                         <AvatarLive userId={user.id} name={user.name} size={32} live={isTracking} />
                         <div>
-                          <Link
-                            to="/orgs/$orgId/members/$userId"
-                            params={{ orgId: params.orgId, userId: user.id }}
-                            className="text-[13px] font-medium hover:underline"
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setStatsUserId(user.id);
+                            }}
+                            className="text-left text-[13px] font-medium hover:underline"
                           >
                             {user.name}
-                          </Link>
+                          </button>
                           <div className="text-[11px] text-ink4">{user.email}</div>
                         </div>
                       </div>
@@ -389,7 +400,7 @@ function MembersPage() {
                       {isTracking ? <Pill tone="good">● Tracking</Pill> : <Pill>Offline</Pill>}
                     </TableCell>
                     {canManage && (
-                      <TableCell className="py-2.5">
+                      <TableCell className="py-2.5" onClick={(e) => e.stopPropagation()}>
                         {currentUser?.id !== user.id && (
                           <MemberRowActions
                             orgId={params.orgId}
@@ -470,8 +481,448 @@ function MembersPage() {
           )}
         </section>
       )}
+
+      {statsUserId && (
+        <MemberStatsPanel
+          orgId={params.orgId}
+          userId={statsUserId}
+          member={members.find((m) => m.user.id === statsUserId) ?? null}
+          presence={presenceByUser.get(statsUserId) ?? 'offline'}
+          onClose={() => setStatsUserId(null)}
+        />
+      )}
     </div>
   );
+}
+
+// ── Member stats side panel ─────────────────────────────────────────────
+
+interface TimeEntriesResponse {
+  entries: TimeEntryDto[];
+}
+
+interface ScreenshotListItem {
+  screenshot: {
+    id: string;
+    capturedAt: string;
+    activeApp: string | null;
+  };
+  thumbnailUrl: string | null;
+}
+
+interface ScreenshotsResponse {
+  items: ScreenshotListItem[];
+}
+
+function MemberStatsPanel({
+  orgId,
+  userId,
+  member,
+  presence,
+  onClose,
+}: {
+  orgId: string;
+  userId: string;
+  member: MemberRow | null;
+  presence: PresenceEntryDto['state'];
+  onClose: () => void;
+}) {
+  // Esc-to-close behavior, mounted once per open.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const todayFrom = startOfTodayIso();
+  const weekFromIso = useMemo(() => {
+    const now = new Date();
+    const day = now.getDay();
+    const monday = new Date(now);
+    const offset = day === 0 ? 6 : day - 1;
+    monday.setDate(now.getDate() - offset);
+    monday.setHours(0, 0, 0, 0);
+    return monday.toISOString();
+  }, []);
+
+  const allTotalsQuery = useQuery({
+    queryKey: queryKeys.timeTotals(orgId, { userId }),
+    queryFn: () => apiGet<TimeTotalsResponse>(`/orgs/${orgId}/reports/time-totals`, { userId }),
+  });
+  const todayTotalsQuery = useQuery({
+    queryKey: queryKeys.timeTotals(orgId, { userId, from: todayFrom }),
+    queryFn: () =>
+      apiGet<TimeTotalsResponse>(`/orgs/${orgId}/reports/time-totals`, {
+        userId,
+        from: todayFrom,
+      }),
+    refetchInterval: 30_000,
+  });
+  const weekTotalsQuery = useQuery({
+    queryKey: queryKeys.timeTotals(orgId, { userId, from: weekFromIso }),
+    queryFn: () =>
+      apiGet<TimeTotalsResponse>(`/orgs/${orgId}/reports/time-totals`, {
+        userId,
+        from: weekFromIso,
+      }),
+  });
+  const weekEntriesQuery = useQuery({
+    queryKey: ['orgs', orgId, 'time-entries', { userId, from: weekFromIso }],
+    queryFn: () =>
+      apiGet<TimeEntriesResponse>(`/orgs/${orgId}/time-entries`, {
+        userId,
+        from: weekFromIso,
+        limit: 100,
+      }),
+  });
+  const recentEntriesQuery = useQuery({
+    queryKey: ['orgs', orgId, 'time-entries', { userId, limit: 5 }],
+    queryFn: () => apiGet<TimeEntriesResponse>(`/orgs/${orgId}/time-entries`, { userId, limit: 5 }),
+  });
+  const screenshotsQuery = useQuery({
+    queryKey: queryKeys.screenshots(orgId, { userId }),
+    queryFn: () => apiGet<ScreenshotsResponse>(`/orgs/${orgId}/screenshots`, { userId, limit: 6 }),
+  });
+
+  const allTotals = allTotalsQuery.data?.rows ?? [];
+  const totalSeconds = allTotals.reduce((s, r) => s + r.totalActiveSeconds, 0);
+  const totalEarned = allTotals.reduce((s, r) => s + (r.earnedCents ?? 0), 0);
+  const anyEarned = allTotals.some((r) => r.earnedCents !== null);
+
+  const todaySeconds = (todayTotalsQuery.data?.rows ?? []).reduce(
+    (s, r) => s + r.totalActiveSeconds,
+    0,
+  );
+  const weekTotals = weekTotalsQuery.data?.rows ?? [];
+  const weekSeconds = weekTotals.reduce((s, r) => s + r.totalActiveSeconds, 0);
+  const weekEarned = weekTotals.reduce((s, r) => s + (r.earnedCents ?? 0), 0);
+  const weekAnyEarned = weekTotals.some((r) => r.earnedCents !== null);
+
+  // Real activity % over this week's sessions.
+  const weekEntries = weekEntriesQuery.data?.entries ?? [];
+  let activeSum = 0;
+  let totalSum = 0;
+  for (const e of weekEntries) {
+    activeSum += e.totalActiveSeconds ?? 0;
+    totalSum += (e.totalActiveSeconds ?? 0) + (e.totalIdleSeconds ?? 0);
+  }
+  const activityPercent = totalSum > 0 ? (activeSum / totalSum) * 100 : 0;
+
+  // Default rate = most common non-null per-project rate.
+  const rateCounts = new Map<number, number>();
+  for (const r of allTotals) {
+    if (r.hourlyRateCents === null) continue;
+    rateCounts.set(r.hourlyRateCents, (rateCounts.get(r.hourlyRateCents) ?? 0) + 1);
+  }
+  let defaultRateCents: number | null = null;
+  let topCount = 0;
+  for (const [rate, c] of rateCounts) {
+    if (c > topCount) {
+      defaultRateCents = rate;
+      topCount = c;
+    }
+  }
+
+  const presenceLabel =
+    presence === 'active' ? '● Active' : presence === 'idle' ? '● Idle' : 'Offline';
+  const presenceTone: 'good' | 'warn' | 'neutral' =
+    presence === 'active' ? 'good' : presence === 'idle' ? 'warn' : 'neutral';
+
+  const entries = recentEntriesQuery.data?.entries ?? [];
+  const screenshots = screenshotsQuery.data?.items ?? [];
+
+  return (
+    <div className="fixed inset-0 z-50">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-foreground/30 backdrop-blur-[1px]"
+        onClick={onClose}
+        aria-hidden
+      />
+      {/* Panel */}
+      <aside
+        role="dialog"
+        aria-label="Member details"
+        className="absolute right-0 top-0 flex h-full w-[520px] max-w-[100vw] flex-col border-l border-border bg-card shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+          {member ? (
+            <div className="flex items-center gap-3">
+              <AvatarLive
+                userId={member.user.id}
+                name={member.user.name}
+                size={44}
+                live={presence === 'active' || presence === 'idle'}
+              />
+              <div className="min-w-0">
+                <div className="text-[16px] font-semibold tracking-tight">{member.user.name}</div>
+                <div className="truncate text-[12px] text-ink3">{member.user.email}</div>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <Pill tone={presenceTone}>{presenceLabel}</Pill>
+                  {member.membership.role === 'owner' ? (
+                    <Pill tone="dark">Owner</Pill>
+                  ) : member.membership.role === 'admin' ? (
+                    <Pill tone="accent">Admin</Pill>
+                  ) : (
+                    <Pill>Member</Pill>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <Skeleton className="h-12 w-48" />
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-7 w-7 place-items-center rounded text-ink3 hover:bg-muted"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 [scrollbar-gutter:stable]">
+          {/* KPI tiles */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <MiniTile
+              label="Today"
+              value={formatHours(todaySeconds)}
+              sub="tracked"
+              loading={todayTotalsQuery.isLoading}
+            />
+            <MiniTile
+              label="This week"
+              value={formatHours(weekSeconds)}
+              sub={weekAnyEarned ? `${formatMoney(weekEarned)} billable` : 'no rates'}
+              loading={weekTotalsQuery.isLoading}
+            />
+            <MiniTile
+              label="Activity"
+              value={`${activityPercent.toFixed(0)}%`}
+              sub="this week"
+              loading={weekEntriesQuery.isLoading}
+            />
+          </div>
+
+          {/* Member info */}
+          {member && (
+            <section className="mt-4 rounded-lg border border-border bg-background/60 px-3.5 py-3">
+              <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-ink4">
+                Member
+              </h3>
+              <InfoRow label="Role" value={titleCase(member.membership.role)} />
+              <InfoRow label="Joined" value={formatRelative(member.membership.createdAt)} />
+              <InfoRow
+                label="Default rate"
+                value={defaultRateCents !== null ? `${formatMoney(defaultRateCents)}/h` : '—'}
+              />
+              <InfoRow label="Total tracked" value={formatHours(totalSeconds)} />
+              <InfoRow label="Total earned" value={anyEarned ? formatMoney(totalEarned) : '—'} />
+              <InfoRow label="Projects" value={String(allTotals.length)} />
+            </section>
+          )}
+
+          {/* Project breakdown */}
+          <section className="mt-4 rounded-lg border border-border bg-background/60">
+            <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
+              <h3 className="text-[12px] font-medium">Project breakdown</h3>
+              <span className="font-mono text-[10.5px] text-ink4">all time</span>
+            </div>
+            {allTotalsQuery.isLoading ? (
+              <div className="p-3">
+                <Skeleton className="h-20 w-full" />
+              </div>
+            ) : allTotals.length === 0 ? (
+              <p className="px-3.5 py-6 text-center text-[12px] text-ink3">No tracked time yet.</p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {[...allTotals]
+                  .sort((a, b) => b.totalActiveSeconds - a.totalActiveSeconds)
+                  .map((r) => {
+                    const share =
+                      totalSeconds > 0 ? (r.totalActiveSeconds / totalSeconds) * 100 : 0;
+                    return (
+                      <li
+                        key={r.projectId}
+                        className="grid grid-cols-12 items-center gap-2 px-3.5 py-2 text-[12.5px]"
+                      >
+                        <div className="col-span-5 flex items-center gap-2">
+                          <span
+                            className="inline-block h-2 w-2 rounded-sm"
+                            style={{ background: projectAccent(r.projectId) }}
+                          />
+                          <span className="truncate font-medium">{r.projectName}</span>
+                        </div>
+                        <div className="col-span-3 font-mono tabular-nums text-ink2">
+                          {formatHours(r.totalActiveSeconds)}
+                        </div>
+                        <div className="col-span-2 font-mono tabular-nums text-ink2">
+                          {r.earnedCents !== null ? formatMoney(r.earnedCents) : '—'}
+                        </div>
+                        <div className="col-span-2">
+                          <div className="flex items-center gap-1.5">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${share}%`,
+                                  background: projectAccent(r.projectId),
+                                }}
+                              />
+                            </div>
+                            <span className="font-mono text-[10px] tabular-nums text-ink4">
+                              {share.toFixed(0)}%
+                            </span>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+              </ul>
+            )}
+          </section>
+
+          {/* Recent sessions */}
+          <section className="mt-4 rounded-lg border border-border bg-background/60">
+            <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
+              <h3 className="text-[12px] font-medium">Recent sessions</h3>
+              <span className="font-mono text-[10.5px] text-ink4">last 5</span>
+            </div>
+            {recentEntriesQuery.isLoading ? (
+              <div className="p-3">
+                <Skeleton className="h-20 w-full" />
+              </div>
+            ) : entries.length === 0 ? (
+              <p className="px-3.5 py-6 text-center text-[12px] text-ink3">No sessions yet.</p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {entries.map((e) => (
+                  <li
+                    key={e.id}
+                    className="flex items-center justify-between px-3.5 py-2 text-[12px]"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-mono text-[11.5px] text-ink2">
+                        {formatDateTime(e.startedAt)}
+                      </div>
+                      <div className="truncate text-[10.5px] text-ink4">
+                        {e.endedAt ? `→ ${formatDateTime(e.endedAt)}` : 'in progress'}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono font-medium tabular-nums">
+                        {formatHours(e.totalActiveSeconds)}
+                      </div>
+                      <div className="font-mono text-[10px] text-ink4">
+                        {sessionActivity(e).toFixed(0)}% active
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* Recent screenshots */}
+          <section className="mb-2 mt-4 rounded-lg border border-border bg-background/60 px-3.5 py-3">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-[12px] font-medium">Recent screenshots</h3>
+              <span className="font-mono text-[10.5px] text-ink4">last 6</span>
+            </div>
+            {screenshotsQuery.isLoading ? (
+              <div className="grid grid-cols-3 gap-1.5">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="aspect-video w-full" />
+                ))}
+              </div>
+            ) : screenshots.length === 0 ? (
+              <p className="py-4 text-center text-[12px] text-ink3">No screenshots yet.</p>
+            ) : (
+              <div className="grid grid-cols-3 gap-1.5">
+                {screenshots.map((item) => (
+                  <div
+                    key={item.screenshot.id}
+                    className="relative aspect-video overflow-hidden rounded border border-border bg-muted"
+                    title={
+                      item.screenshot.activeApp
+                        ? `${item.screenshot.activeApp} · ${formatRelative(item.screenshot.capturedAt)}`
+                        : formatRelative(item.screenshot.capturedAt)
+                    }
+                  >
+                    {item.thumbnailUrl ? (
+                      <img
+                        src={item.thumbnailUrl}
+                        alt=""
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="grid h-full place-items-center text-[10px] text-ink4">—</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        <footer className="border-t border-border px-5 py-3">
+          <Button asChild variant="outline" className="h-8 w-full text-[12.5px]">
+            <Link to="/orgs/$orgId/members/$userId" params={{ orgId, userId }}>
+              Open full profile →
+            </Link>
+          </Button>
+        </footer>
+      </aside>
+    </div>
+  );
+}
+
+function MiniTile({
+  label,
+  value,
+  sub,
+  loading,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  loading?: boolean;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-background/60 px-2.5 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-ink3">{label}</div>
+      {loading ? (
+        <Skeleton className="mt-1 h-5 w-12" />
+      ) : (
+        <div className="mt-0.5 font-mono text-[16px] font-medium tabular-nums">{value}</div>
+      )}
+      <div className="text-[10px] text-ink4">{sub}</div>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-t border-border py-1.5 text-[12px] first:border-t-0">
+      <span className="text-ink3">{label}</span>
+      <span className="truncate text-right font-medium">{value}</span>
+    </div>
+  );
+}
+
+function titleCase(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function sessionActivity(e: TimeEntryDto): number {
+  const a = e.totalActiveSeconds ?? 0;
+  const idle = e.totalIdleSeconds ?? 0;
+  const tot = a + idle;
+  return tot > 0 ? (a / tot) * 100 : 0;
 }
 
 // Renders children into the AppShell's top-bar action slot. The slot div is
