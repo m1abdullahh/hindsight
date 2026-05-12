@@ -6,6 +6,8 @@ dist
 coverage
 .turbo
 .cache
+.vite
+.tanstack
 
 # Tauri
 apps/desktop/src-tauri/target
