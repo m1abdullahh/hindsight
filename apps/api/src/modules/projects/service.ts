@@ -70,6 +70,7 @@ export const createProject = async (
         description: input.description ?? null,
         screenshotIntervalMinutes: input.screenshotIntervalMinutes,
         blurScreenshots: input.blurScreenshots,
+        idleTimeoutMinutes: input.idleTimeoutMinutes,
         createdBy: caller.userId,
       },
     });
@@ -128,6 +129,9 @@ export const updateProject = async (
           ? { screenshotIntervalMinutes: patch.screenshotIntervalMinutes }
           : {}),
         ...(patch.blurScreenshots !== undefined ? { blurScreenshots: patch.blurScreenshots } : {}),
+        ...(patch.idleTimeoutMinutes !== undefined
+          ? { idleTimeoutMinutes: patch.idleTimeoutMinutes }
+          : {}),
       },
     });
     await writeAudit(tx, {

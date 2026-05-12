@@ -51,6 +51,7 @@ export interface ProjectDto {
   description: string | null;
   screenshotIntervalMinutes: number;
   blurScreenshots: boolean;
+  idleTimeoutMinutes: number;
   archivedAt: string | null;
   createdBy: string;
   createdAt: string;

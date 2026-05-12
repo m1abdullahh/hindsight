@@ -87,6 +87,7 @@ export const toProjectDto = (p: Project): ProjectDto => ({
   description: p.description,
   screenshotIntervalMinutes: p.screenshotIntervalMinutes,
   blurScreenshots: p.blurScreenshots,
+  idleTimeoutMinutes: p.idleTimeoutMinutes,
   archivedAt: p.archivedAt?.toISOString() ?? null,
   createdBy: p.createdBy,
   createdAt: p.createdAt.toISOString(),

@@ -3,6 +3,7 @@ import { z } from 'zod';
 const Name = z.string().trim().min(1).max(100);
 const Description = z.string().trim().max(2000).nullable().optional();
 const Interval = z.number().int().min(1).max(60);
+const IdleTimeout = z.number().int().min(1).max(60);
 const Cents = z.number().int().min(0).max(1_000_000_00);
 
 export const createProjectInput = z.object({
@@ -10,6 +11,7 @@ export const createProjectInput = z.object({
   description: Description,
   screenshotIntervalMinutes: Interval.default(10),
   blurScreenshots: z.boolean().default(false),
+  idleTimeoutMinutes: IdleTimeout.default(5),
 });
 export type CreateProjectInput = z.infer<typeof createProjectInput>;
 
@@ -19,6 +21,7 @@ export const updateProjectInput = z
     description: Description,
     screenshotIntervalMinutes: Interval.optional(),
     blurScreenshots: z.boolean().optional(),
+    idleTimeoutMinutes: IdleTimeout.optional(),
   })
   .refine((v) => Object.values(v).some((x) => x !== undefined), {
     message: 'must include at least one field',

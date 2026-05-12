@@ -1,13 +1,14 @@
 import type { ProjectDto } from '@hindsight/shared/dto';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { Archive, FolderPlus } from 'lucide-react';
-import { useState } from 'react';
+import { FolderPlus, MoreHorizontal, Plus } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
+import { AvatarLive } from '@/components/ui/avatar-live';
 import { Button } from '@/components/ui/button';
-import { Pill } from '@/components/ui/pill';
 import {
   Dialog,
   DialogContent,
@@ -17,34 +18,52 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Pill } from '@/components/ui/pill';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { useToast } from '@/components/ui/use-toast';
-import { apiGet, apiPost } from '@/lib/api';
-import { formatRelative } from '@/lib/format';
+import { apiDelete, apiGet, apiPost } from '@/lib/api';
+import { formatDate, formatHours } from '@/lib/format';
 import { projectAccent, projectAccentSoft } from '@/lib/project-accent';
 import { queryKeys } from '@/lib/queries';
 import { useCan } from '@/lib/use-can';
 
+type Tab = 'active' | 'archived' | 'all';
+
 const searchSchema = z.object({
+  // Legacy `archived=true` URLs map to the new 'archived' tab.
   archived: z
     .union([z.boolean(), z.enum(['true', 'false'])])
     .transform((v) => v === true || v === 'true')
     .optional(),
+  view: z.enum(['active', 'archived', 'all']).optional(),
 });
 
 interface ProjectsResponse {
   projects: ProjectDto[];
+}
+
+interface TimeTotalRow {
+  userId: string;
+  userName: string;
+  userEmail: string;
+  projectId: string;
+  projectName: string;
+  totalActiveSeconds: number;
+  hourlyRateCents: number | null;
+  earnedCents: number | null;
+}
+interface TimeTotalsResponse {
+  rows: TimeTotalRow[];
 }
 
 export const Route = createFileRoute('/_app/orgs/$orgId/projects/')({
@@ -52,13 +71,33 @@ export const Route = createFileRoute('/_app/orgs/$orgId/projects/')({
   component: ProjectsListPage,
 });
 
+function startOfTodayIso(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function startOfWeekIso(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  const offset = day === 0 ? 6 : day - 1;
+  monday.setDate(now.getDate() - offset);
+  monday.setHours(0, 0, 0, 0);
+  return monday.toISOString();
+}
+
 function ProjectsListPage() {
   const params = Route.useParams();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const includeArchived = search.archived ?? false;
+  const tab: Tab = search.view ?? (search.archived ? 'archived' : 'active');
   const canCreate = useCan('projects:create');
 
+  // The list endpoint returns only active projects unless `includeArchived` is
+  // set, in which case it returns both. Fetch with the flag whenever the user
+  // might see archived rows, and filter client-side per tab.
+  const includeArchived = tab !== 'active';
   const query = useQuery({
     queryKey: queryKeys.projects(params.orgId, includeArchived),
     queryFn: () =>
@@ -67,141 +106,338 @@ function ProjectsListPage() {
       }),
   });
 
-  const projectCount = query.data?.projects.length ?? 0;
+  const todayFrom = startOfTodayIso();
+  const todayTotalsQuery = useQuery({
+    queryKey: queryKeys.timeTotals(params.orgId, { from: todayFrom }),
+    queryFn: () =>
+      apiGet<TimeTotalsResponse>(`/orgs/${params.orgId}/reports/time-totals`, {
+        from: todayFrom,
+      }),
+    refetchInterval: 30_000,
+  });
+
+  const weekFrom = startOfWeekIso();
+  const weekTotalsQuery = useQuery({
+    queryKey: queryKeys.timeTotals(params.orgId, { from: weekFrom }),
+    queryFn: () =>
+      apiGet<TimeTotalsResponse>(`/orgs/${params.orgId}/reports/time-totals`, {
+        from: weekFrom,
+      }),
+  });
+
+  const allProjects = query.data?.projects ?? [];
+
+  const counts = useMemo(() => {
+    let active = 0;
+    let archived = 0;
+    for (const p of allProjects) {
+      if (p.archivedAt) archived++;
+      else active++;
+    }
+    return { active, archived, all: allProjects.length };
+  }, [allProjects]);
+
+  const visibleProjects = useMemo(() => {
+    if (tab === 'active') return allProjects.filter((p) => !p.archivedAt);
+    if (tab === 'archived') return allProjects.filter((p) => p.archivedAt);
+    return allProjects;
+  }, [allProjects, tab]);
+
+  // Derive per-project today + this-week + members from time-totals.
+  const todayByProject = useMemo(
+    () => secondsByProject(todayTotalsQuery.data?.rows ?? []),
+    [todayTotalsQuery.data],
+  );
+  const weekByProject = useMemo(
+    () => secondsByProject(weekTotalsQuery.data?.rows ?? []),
+    [weekTotalsQuery.data],
+  );
+  const membersByProject = useMemo(
+    () => membersFromRows(weekTotalsQuery.data?.rows ?? []),
+    [weekTotalsQuery.data],
+  );
+
+  const setTab = (next: Tab) => {
+    navigate({ search: next === 'active' ? {} : { view: next } });
+  };
 
   return (
     <div className="px-7 py-6">
-      <header className="mb-5 flex items-end justify-between">
-        <div>
-          <h1 className="text-[26px] font-semibold tracking-tight">Projects</h1>
-          <p className="mt-1 text-[13px] text-ink3">
-            {includeArchived
-              ? 'Archived projects in this organization.'
+      {canCreate && (
+        <HeaderActionsPortal>
+          <NewProjectDialog orgId={params.orgId} />
+        </HeaderActionsPortal>
+      )}
+
+      <header className="mb-5">
+        <h1 className="text-[26px] font-semibold tracking-tight">Projects</h1>
+        <p className="mt-1 text-[13px] text-ink3">
+          {tab === 'archived'
+            ? 'Archived projects in this organization.'
+            : tab === 'all'
+              ? 'All projects in this organization.'
               : 'Active projects in this organization.'}
-          </p>
-        </div>
-        {canCreate && <NewProjectDialog orgId={params.orgId} />}
+        </p>
       </header>
 
-      {/* Active/Archived pill toggle (mock style) */}
-      <div className="mb-4 inline-flex rounded-md bg-muted p-0.5 text-[12.5px]">
-        <PillToggle active={!includeArchived} onClick={() => navigate({ search: {} })}>
+      <div className="mb-4 flex items-center border-b border-border">
+        <TabButton active={tab === 'active'} onClick={() => setTab('active')} count={counts.active}>
           Active
-          {!includeArchived && projectCount > 0 && (
-            <span className="ml-1.5 font-mono text-[11px] text-ink4">{projectCount}</span>
-          )}
-        </PillToggle>
-        <PillToggle
-          active={includeArchived}
-          onClick={() => navigate({ search: { archived: true } })}
+        </TabButton>
+        <TabButton
+          active={tab === 'archived'}
+          onClick={() => setTab('archived')}
+          count={tab === 'archived' || counts.archived > 0 ? counts.archived : undefined}
         >
           Archived
-        </PillToggle>
+        </TabButton>
+        <TabButton active={tab === 'all'} onClick={() => setTab('all')}>
+          All
+        </TabButton>
       </div>
 
       {query.isLoading ? (
         <div className="rounded-lg border border-border bg-card p-4">
           <Skeleton className="h-40 w-full" />
         </div>
-      ) : query.data?.projects.length ? (
-        <div className="rounded-lg border border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <div className="flex items-center gap-2.5">
-              <h2 className="text-[13px] font-medium">
-                {includeArchived ? 'Archived projects' : 'Active projects'}
-              </h2>
-              <span className="font-mono text-[11px] text-ink4">
-                {projectCount} project{projectCount === 1 ? '' : 's'}
-              </span>
-            </div>
+      ) : visibleProjects.length ? (
+        <section className="rounded-lg border border-border bg-card">
+          <div className="grid grid-cols-12 items-center gap-3 border-b border-border px-4 py-2.5 text-[10.5px] uppercase tracking-wide text-ink4">
+            <div className="col-span-4">Name</div>
+            <div className="col-span-1">Members</div>
+            <div className="col-span-1">Today</div>
+            <div className="col-span-1">This week</div>
+            <div className="col-span-1">Interval</div>
+            <div className="col-span-1">Blur</div>
+            <div className="col-span-2">Created</div>
+            <div className="col-span-1" />
           </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Interval</TableHead>
-                <TableHead>Blur</TableHead>
-                <TableHead>Created</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {query.data.projects.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell>
+          <ul className="divide-y divide-border">
+            {visibleProjects.map((p) => {
+              const todaySec = todayByProject.get(p.id) ?? 0;
+              const weekSec = weekByProject.get(p.id) ?? 0;
+              const members = membersByProject.get(p.id) ?? [];
+              return (
+                <li
+                  key={p.id}
+                  className="grid grid-cols-12 items-center gap-3 px-4 py-3 text-[13px]"
+                >
+                  <div className="col-span-4">
                     <Link
                       to="/orgs/$orgId/projects/$projectId"
                       params={{ orgId: params.orgId, projectId: p.id }}
-                      className="flex items-center gap-2.5 hover:underline"
+                      className="group flex items-center gap-3"
                     >
                       <span
-                        className="grid h-[22px] w-[22px] place-items-center rounded"
+                        className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-md"
                         style={{ background: projectAccentSoft(p.id) }}
                       >
                         <span
-                          className="h-[9px] w-[9px] rounded-sm"
+                          className="h-2.5 w-2.5 rounded-sm"
                           style={{ background: projectAccent(p.id) }}
                         />
                       </span>
-                      <span>
-                        <span className="block text-[13px] font-medium">{p.name}</span>
-                        <span className="block text-[11px] text-ink4">{p.description ?? '—'}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium group-hover:underline">
+                          {p.name}
+                        </span>
+                        {p.description && (
+                          <span className="block truncate text-[11px] text-ink4">
+                            {p.description}
+                          </span>
+                        )}
                       </span>
-                      {p.archivedAt && (
-                        <Pill tone="neutral" className="ml-1">
-                          <Archive className="h-3 w-3" />
-                          archived
-                        </Pill>
-                      )}
                     </Link>
-                  </TableCell>
-                  <TableCell className="font-mono text-[12px] text-ink3">
+                  </div>
+                  <div className="col-span-1">
+                    <AvatarStack people={members} />
+                  </div>
+                  <div className="col-span-1 font-mono tabular-nums text-ink2">
+                    {todaySec > 0 ? formatHours(todaySec) : '—'}
+                  </div>
+                  <div className="col-span-1 font-mono tabular-nums text-ink2">
+                    {weekSec > 0 ? formatHours(weekSec) : '—'}
+                  </div>
+                  <div className="col-span-1 font-mono text-[12px] text-ink3">
                     {p.screenshotIntervalMinutes} min
-                  </TableCell>
-                  <TableCell>
+                  </div>
+                  <div className="col-span-1">
                     {p.blurScreenshots ? <Pill tone="accent">On</Pill> : <Pill>Off</Pill>}
-                  </TableCell>
-                  <TableCell className="text-[12px] text-ink3">
-                    {formatRelative(p.createdAt)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+                  </div>
+                  <div className="col-span-2 text-[12.5px] text-ink3">
+                    {formatDate(p.createdAt)}
+                  </div>
+                  <div className="col-span-1 flex justify-end">
+                    <ProjectRowActions project={p} orgId={params.orgId} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       ) : (
-        <EmptyState canCreate={canCreate} archived={includeArchived} />
+        <EmptyState canCreate={canCreate} tab={tab} />
       )}
     </div>
   );
 }
 
-function PillToggle({
+// ── helpers ─────────────────────────────────────────────────────────────
+
+function secondsByProject(rows: TimeTotalRow[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    map.set(r.projectId, (map.get(r.projectId) ?? 0) + r.totalActiveSeconds);
+  }
+  return map;
+}
+
+function membersFromRows(rows: TimeTotalRow[]): Map<string, { id: string; name: string }[]> {
+  const map = new Map<string, { id: string; name: string }[]>();
+  for (const r of rows) {
+    const arr = map.get(r.projectId) ?? [];
+    if (!arr.some((m) => m.id === r.userId)) {
+      arr.push({ id: r.userId, name: r.userName });
+      map.set(r.projectId, arr);
+    }
+  }
+  return map;
+}
+
+// ── small visual primitives ─────────────────────────────────────────────
+
+function TabButton({
   active,
   onClick,
   children,
+  count,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  count?: number | undefined;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={
-        'rounded px-3.5 py-1 transition-colors ' +
-        (active
-          ? 'bg-card font-medium text-foreground shadow-sm'
-          : 'text-ink3 hover:text-foreground')
+        'relative px-3 pb-2.5 pt-1 text-[12.5px] transition-colors ' +
+        (active ? 'font-medium text-foreground' : 'text-ink3 hover:text-foreground')
       }
     >
       {children}
+      {count !== undefined && (
+        <span className="ml-1.5 font-mono text-[11px] text-ink4">{count}</span>
+      )}
+      {active && (
+        <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-foreground" />
+      )}
     </button>
   );
 }
 
-function EmptyState({ canCreate, archived }: { canCreate: boolean; archived: boolean }) {
-  if (archived) {
+function AvatarStack({
+  people,
+  max = 3,
+}: {
+  people: { id: string; name: string }[];
+  max?: number;
+}) {
+  if (people.length === 0) {
+    return <span className="text-[11px] text-ink4">—</span>;
+  }
+  const visible = people.slice(0, max);
+  const extra = people.length - visible.length;
+  return (
+    <div className="flex items-center">
+      {visible.map((p, i) => (
+        <div
+          key={p.id}
+          className="rounded-full ring-2 ring-card"
+          style={{ marginLeft: i === 0 ? 0 : -8 }}
+        >
+          <AvatarLive userId={p.id} name={p.name} size={22} />
+        </div>
+      ))}
+      {extra > 0 && (
+        <div
+          className="grid h-[22px] w-[22px] place-items-center rounded-full bg-muted text-[10px] font-medium text-ink3 ring-2 ring-card"
+          style={{ marginLeft: -8 }}
+        >
+          +{extra}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HeaderActionsPortal({ children }: { children: React.ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTarget(document.getElementById('page-header-actions'));
+  }, []);
+  if (!target) return null;
+  return createPortal(children, target);
+}
+
+function ProjectRowActions({ project, orgId }: { project: ProjectDto; orgId: string }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const archived = Boolean(project.archivedAt);
+
+  const archiveMutation = useMutation({
+    mutationFn: () =>
+      archived
+        ? apiDelete(`/projects/${project.id}/archive`)
+        : apiPost(`/projects/${project.id}/archive`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orgs', orgId, 'projects'] });
+      toast({ title: archived ? 'Project unarchived' : 'Project archived' });
+    },
+    onError: (err) => {
+      toast({
+        title: archived ? 'Could not unarchive' : 'Could not archive',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Actions for ${project.name}`}
+          className="h-8 w-8"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuItem asChild>
+          <Link to="/orgs/$orgId/projects/$projectId" params={{ orgId, projectId: project.id }}>
+            Open project
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(e) => {
+            e.preventDefault();
+            archiveMutation.mutate();
+          }}
+        >
+          {archived ? 'Unarchive' : 'Archive'}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function EmptyState({ canCreate, tab }: { canCreate: boolean; tab: Tab }) {
+  if (tab === 'archived') {
     return (
       <div className="rounded-lg border border-dashed border-border-strong bg-card px-6 py-14 text-center">
         <p className="text-[13px] text-ink3">No archived projects.</p>
@@ -236,6 +472,7 @@ const createSchema = z.object({
   description: z.string().trim().max(2000).optional(),
   screenshotIntervalMinutes: z.coerce.number().int().min(1).max(60),
   blurScreenshots: z.boolean(),
+  idleTimeoutMinutes: z.coerce.number().int().min(1).max(60),
 });
 type CreateInput = z.infer<typeof createSchema>;
 
@@ -249,6 +486,7 @@ function NewProjectDialog({ orgId }: { orgId: string }) {
       description: '',
       screenshotIntervalMinutes: 10,
       blurScreenshots: false,
+      idleTimeoutMinutes: 5,
     },
   });
 
@@ -259,6 +497,7 @@ function NewProjectDialog({ orgId }: { orgId: string }) {
         description: input.description || undefined,
         screenshotIntervalMinutes: input.screenshotIntervalMinutes,
         blurScreenshots: input.blurScreenshots,
+        idleTimeoutMinutes: input.idleTimeoutMinutes,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orgs', orgId, 'projects'] });
@@ -289,7 +528,10 @@ function NewProjectDialog({ orgId }: { orgId: string }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>New project</Button>
+        <Button className="h-9 gap-1.5 px-3.5">
+          <Plus className="h-3.5 w-3.5" />
+          New project
+        </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -310,20 +552,37 @@ function NewProjectDialog({ orgId }: { orgId: string }) {
             <Label htmlFor="project-description">Description (optional)</Label>
             <Input id="project-description" {...form.register('description')} />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="project-interval">Screenshot interval (minutes)</Label>
-            <Input
-              id="project-interval"
-              type="number"
-              min={1}
-              max={60}
-              {...form.register('screenshotIntervalMinutes', { valueAsNumber: true })}
-            />
-            {form.formState.errors.screenshotIntervalMinutes && (
-              <p className="text-xs text-destructive">
-                {form.formState.errors.screenshotIntervalMinutes.message}
-              </p>
-            )}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="project-interval">Screenshot interval (min)</Label>
+              <Input
+                id="project-interval"
+                type="number"
+                min={1}
+                max={60}
+                {...form.register('screenshotIntervalMinutes', { valueAsNumber: true })}
+              />
+              {form.formState.errors.screenshotIntervalMinutes && (
+                <p className="text-xs text-destructive">
+                  {form.formState.errors.screenshotIntervalMinutes.message}
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="project-idle-timeout">Idle timeout (min)</Label>
+              <Input
+                id="project-idle-timeout"
+                type="number"
+                min={1}
+                max={60}
+                {...form.register('idleTimeoutMinutes', { valueAsNumber: true })}
+              />
+              {form.formState.errors.idleTimeoutMinutes && (
+                <p className="text-xs text-destructive">
+                  {form.formState.errors.idleTimeoutMinutes.message}
+                </p>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <input

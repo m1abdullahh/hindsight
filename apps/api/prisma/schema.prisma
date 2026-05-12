@@ -165,6 +165,9 @@ model Project {
   description               String?
   screenshotIntervalMinutes Int       @default(10) @map("screenshot_interval_minutes")
   blurScreenshots           Boolean   @default(false) @map("blur_screenshots")
+  // Minutes of OS-level inactivity after which the desktop tracker auto-pauses
+  // and prompts the user to keep or discard the idle gap. Defaults to 5 min.
+  idleTimeoutMinutes        Int       @default(5) @map("idle_timeout_minutes")
   archivedAt                DateTime? @map("archived_at")
   createdBy                 String    @map("created_by")
   createdAt                 DateTime  @default(now()) @map("created_at")
