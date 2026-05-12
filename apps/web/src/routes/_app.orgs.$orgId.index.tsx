@@ -1,7 +1,9 @@
 import type { MembershipDto, PresenceEntryDto, ProjectDto, UserDto } from '@hindsight/shared/dto';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, createFileRoute } from '@tanstack/react-router';
+import { useState } from 'react';
 
+import { ScreenshotDialog } from '@/components/screenshot-dialog';
 import { ActivityBar, type ActivitySegment } from '@/components/ui/activity-bar';
 import { AvatarLive } from '@/components/ui/avatar-live';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -71,6 +73,9 @@ function DashboardPage() {
   const org = useCurrentOrg();
   const membership = useCurrentMembership();
   const isAdmin = membership?.role === 'owner' || membership?.role === 'admin';
+  const queryClient = useQueryClient();
+  // Screenshot currently open in the full-image dialog; null = closed.
+  const [openId, setOpenId] = useState<string | null>(null);
   void user;
   void org;
 
@@ -339,9 +344,11 @@ function DashboardPage() {
           ) : (
             <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3 lg:grid-cols-6">
               {screenshotItems.slice(0, 12).map((item) => (
-                <div
+                <button
                   key={item.screenshot.id}
-                  className="relative aspect-video overflow-hidden rounded-md border border-border bg-muted"
+                  type="button"
+                  onClick={() => setOpenId(item.screenshot.id)}
+                  className="group relative aspect-video w-full overflow-hidden rounded-md border border-border bg-muted text-left transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2"
                   title={
                     item.screenshot.activeApp
                       ? `${item.screenshot.activeApp} · ${formatRelative(item.screenshot.capturedAt)}`
@@ -365,11 +372,23 @@ function DashboardPage() {
                       hour12: false,
                     })}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}
         </section>
+      )}
+
+      {openId && (
+        <ScreenshotDialog
+          screenshotId={openId}
+          onClose={() => setOpenId(null)}
+          invalidateOnDelete={() => {
+            queryClient.invalidateQueries({
+              queryKey: ['orgs', params.orgId, 'screenshots'],
+            });
+          }}
+        />
       )}
     </div>
   );
