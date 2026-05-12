@@ -39,8 +39,7 @@
       }
     },
     "macOS": {
-      "minimumSystemVersion": "10.15",
-      "frameworks": ["CoreGraphics"]
+      "minimumSystemVersion": "10.15"
     }
   }
 }
