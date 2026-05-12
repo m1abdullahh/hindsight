@@ -1,25 +1,16 @@
 import type { ScreenshotDto } from '@hindsight/shared/dto';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
-import { Image as ImageIcon, Trash2 } from 'lucide-react';
+import { Image as ImageIcon } from 'lucide-react';
 import { useState } from 'react';
 
+import { ScreenshotDialog } from '@/components/screenshot-dialog';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
-import { useToast } from '@/components/ui/use-toast';
-import { ApiError, apiDelete, apiGet } from '@/lib/api';
+import { apiGet } from '@/lib/api';
 import { formatDateTime, formatRelative } from '@/lib/format';
 import { queryKeys } from '@/lib/queries';
-import { useCurrentMembership } from '@/lib/session-store';
 
 interface ScreenshotListItem {
   screenshot: ScreenshotDto;
@@ -31,12 +22,6 @@ interface ScreenshotsPage {
   nextCursor: string | null;
 }
 
-interface ScreenshotDetail {
-  screenshot: ScreenshotDto;
-  fullUrl: string;
-  expiresAt: string;
-}
-
 const PAGE_LIMIT = 48;
 
 export const Route = createFileRoute('/_app/orgs/$orgId/projects/$projectId/screenshots')({
@@ -45,6 +30,7 @@ export const Route = createFileRoute('/_app/orgs/$orgId/projects/$projectId/scre
 
 function ProjectScreenshotsPage() {
   const params = Route.useParams();
+  const queryClient = useQueryClient();
   const [openId, setOpenId] = useState<string | null>(null);
 
   const filters = { projectId: params.projectId };
@@ -148,9 +134,17 @@ function ProjectScreenshotsPage() {
       {openId && (
         <ScreenshotDialog
           screenshotId={openId}
-          orgId={params.orgId}
-          projectId={params.projectId}
           onClose={() => setOpenId(null)}
+          invalidateOnDelete={() => {
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.screenshotsInfinite(params.orgId, {
+                projectId: params.projectId,
+              }),
+            });
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.screenshots(params.orgId, {}),
+            });
+          }}
         />
       )}
     </div>
@@ -194,135 +188,5 @@ function ThumbnailCard({ item, onOpen }: { item: ScreenshotListItem; onOpen: () 
         {time} · {formatRelative(screenshot.capturedAt)}
       </div>
     </button>
-  );
-}
-
-function ScreenshotDialog({
-  screenshotId,
-  orgId,
-  projectId,
-  onClose,
-}: {
-  screenshotId: string;
-  orgId: string;
-  projectId: string;
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const membership = useCurrentMembership();
-
-  const detailQuery = useQuery({
-    queryKey: queryKeys.screenshot(screenshotId),
-    queryFn: () => apiGet<ScreenshotDetail>(`/screenshots/${screenshotId}`),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => apiDelete(`/screenshots/${screenshotId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.screenshotsInfinite(orgId, { projectId }),
-      });
-      // Also nuke the Overview's recent-uploads cache so a deleted shot
-      // disappears there too.
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.screenshots(orgId, {}),
-      });
-      toast({ title: 'Screenshot deleted' });
-      onClose();
-    },
-    onError: (err) => {
-      toast({
-        title: 'Could not delete screenshot',
-        description:
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : 'Unknown error',
-        variant: 'destructive',
-      });
-    },
-  });
-
-  const detail = detailQuery.data;
-  const meta = detail?.screenshot;
-
-  // Delete is admin/owner-only; members no longer see the button at all.
-  const canDelete = !!membership && (membership.role === 'owner' || membership.role === 'admin');
-
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-5xl">
-        <DialogHeader>
-          <DialogTitle>{meta ? formatDateTime(meta.capturedAt) : 'Screenshot'}</DialogTitle>
-          {meta?.activeApp && (
-            <DialogDescription>
-              {meta.activeApp}
-              {meta.activeWindowTitle ? ` — ${meta.activeWindowTitle}` : ''}
-            </DialogDescription>
-          )}
-        </DialogHeader>
-
-        {detailQuery.isLoading ? (
-          <Skeleton className="aspect-video w-full" />
-        ) : detailQuery.error ? (
-          <div className="rounded-md border border-dashed py-12 text-center text-sm text-destructive">
-            {detailQuery.error instanceof Error
-              ? detailQuery.error.message
-              : 'Could not load screenshot.'}
-          </div>
-        ) : detail ? (
-          <div className="space-y-3">
-            <div className="overflow-hidden rounded-md border bg-muted/30">
-              <img
-                src={detail.fullUrl}
-                alt={`Screenshot from ${formatDateTime(detail.screenshot.capturedAt)}`}
-                className="block max-h-[70vh] w-full object-contain"
-              />
-            </div>
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-4">
-              <Meta label="Size">
-                {detail.screenshot.width} × {detail.screenshot.height}
-              </Meta>
-              <Meta label="Monitor">#{detail.screenshot.monitorIndex + 1}</Meta>
-              <Meta label="Keyboard">{detail.screenshot.keyboardEventsCount}</Meta>
-              <Meta label="Mouse">{detail.screenshot.mouseEventsCount}</Meta>
-            </dl>
-          </div>
-        ) : null}
-
-        <DialogFooter>
-          {canDelete && (
-            <Button
-              variant="destructive"
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending || !detail}
-            >
-              {deleteMutation.isPending ? (
-                <Spinner />
-              ) : (
-                <>
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete
-                </>
-              )}
-            </Button>
-          )}
-          <Button variant="outline" onClick={onClose}>
-            Close
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function Meta({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <dt className="text-muted-foreground uppercase tracking-wide">{label}</dt>
-      <dd className="mt-0.5 font-medium">{children}</dd>
-    </div>
   );
 }

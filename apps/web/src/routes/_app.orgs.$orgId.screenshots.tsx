@@ -1,5 +1,5 @@
 import type { MembershipDto, ProjectDto, TimeEntryDto, UserDto } from '@hindsight/shared/dto';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import {
   Camera as CameraIcon,
@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { ScreenshotDialog } from '@/components/screenshot-dialog';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -165,6 +166,10 @@ function ScreenshotsPage() {
   const [timeWindow, setTimeWindow] = useState<TimeWindow>('all');
   const [showIdle, setShowIdle] = useState(true);
   const [blurredOnly, setBlurredOnly] = useState(false);
+  // Screenshot currently open in the full-image modal; null = closed.
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const queryClient = useQueryClient();
 
   const { from, to, eyebrow, chip } = useMemo(() => rangeFor(range), [range]);
   const timeChipLabel = useMemo(() => {
@@ -422,6 +427,7 @@ function ScreenshotsPage() {
                         ? (userById.get(entryById.get(item.screenshot.timeEntryId)!.userId) ?? null)
                         : null
                     }
+                    onOpen={() => setOpenId(item.screenshot.id)}
                   />
                 ))}
               </div>
@@ -441,13 +447,33 @@ function ScreenshotsPage() {
           </Button>
         </div>
       )}
+
+      {openId && (
+        <ScreenshotDialog
+          screenshotId={openId}
+          onClose={() => setOpenId(null)}
+          invalidateOnDelete={() => {
+            queryClient.invalidateQueries({
+              queryKey: ['orgs', params.orgId, 'screenshots'],
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
 
 // ── thumbnail ────────────────────────────────────────────────────────────
 
-function Thumbnail({ item, user }: { item: ScreenshotListItem; user: UserDto | null }) {
+function Thumbnail({
+  item,
+  user,
+  onOpen,
+}: {
+  item: ScreenshotListItem;
+  user: UserDto | null;
+  onOpen: () => void;
+}) {
   const { screenshot, thumbnailUrl } = item;
   const time = new Date(screenshot.capturedAt).toLocaleTimeString('en-US', {
     hour: '2-digit',
@@ -461,8 +487,10 @@ function Thumbnail({ item, user }: { item: ScreenshotListItem; user: UserDto | n
   const palette = user ? paletteFor(user.id) : PALETTE[0]!;
 
   return (
-    <div
-      className="group relative aspect-video overflow-hidden rounded-md border border-border bg-[#0f1115]"
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group relative aspect-video w-full overflow-hidden rounded-md border border-border bg-[#0f1115] text-left transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2"
       title={
         screenshot.activeApp
           ? `${screenshot.activeApp} · ${formatRelative(screenshot.capturedAt)}`
@@ -512,7 +540,7 @@ function Thumbnail({ item, user }: { item: ScreenshotListItem; user: UserDto | n
         <span>{time}</span>
         <span className="opacity-90">{activity.toFixed(0)}%</span>
       </div>
-    </div>
+    </button>
   );
 }
 
