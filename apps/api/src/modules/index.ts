@@ -8,6 +8,7 @@ import { presenceRouter } from './presence/routes.js';
 import { projectsRouter } from './projects/routes.js';
 import { reportsRouter } from './reports/routes.js';
 import { screenshotsRouter } from './screenshots/routes.js';
+import { searchRouter } from './search/routes.js';
 import { timeEntriesRouter } from './time-entries/routes.js';
 
 // Feature module routers under /api/v1.
@@ -22,4 +23,5 @@ export const v1Routers: Router[] = [
   screenshotsRouter,
   reportsRouter,
   presenceRouter,
+  searchRouter,
 ];
