@@ -1,3 +1,16 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# pnpm 10 blocks install scripts for all packages by default; these are the
+# ones whose postinstall we actually need (native bindings, prisma engines,
+# msw's service-worker file, esbuild's platform binary).
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - argon2
+  - esbuild
+  - msgpackr-extract
+  - msw
+  - prisma
+  - sharp
