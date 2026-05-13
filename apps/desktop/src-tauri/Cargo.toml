@@ -30,9 +30,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # Idle detection (cross-platform)
 user-idle = "0.6"
 
-# Credential Manager / Keychain
-keyring = "3"
-
 # Logging + JSON
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

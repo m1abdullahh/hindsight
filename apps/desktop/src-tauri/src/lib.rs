@@ -76,18 +76,25 @@ fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
     Ok(())
 }
 
+fn screen_capture_marker_path(app: &tauri::AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("screen_capture_granted")
+}
+
 /// Reports OS-level permission status for screen recording. On non-macOS
 /// platforms this always returns Granted so the renderer can skip the gate.
 #[tauri::command]
-fn check_screen_capture_permission() -> permissions::PermissionStatus {
-    permissions::check_screen_capture()
+fn check_screen_capture_permission(app: tauri::AppHandle) -> permissions::PermissionStatus {
+    permissions::check_screen_capture(&screen_capture_marker_path(&app))
 }
 
 /// Triggers the macOS permission dialog (first call only). Returns the
 /// post-request status so the renderer can update its gate immediately.
 #[tauri::command]
-fn request_screen_capture_permission() -> permissions::PermissionStatus {
-    permissions::request_screen_capture()
+fn request_screen_capture_permission(app: tauri::AppHandle) -> permissions::PermissionStatus {
+    permissions::request_screen_capture(&screen_capture_marker_path(&app))
 }
 
 /// Opens System Settings → Privacy & Security → Screen Recording. macOS only;
@@ -142,8 +149,15 @@ pub fn run() {
     #[cfg(target_os = "windows")]
     win_aumid::register();
 
+    // Resolution order:
+    //   1. Runtime env (`API_BASE_URL`) — useful for `tauri dev` overrides.
+    //   2. Compile-time env baked in by CI via `option_env!` — this is what
+    //      packaged release builds use; end users never set env vars.
+    //   3. localhost default for plain `cargo run`.
     let api_base = std::env::var("API_BASE_URL")
-        .unwrap_or_else(|_| "http://localhost:3001".to_string());
+        .ok()
+        .or_else(|| option_env!("API_BASE_URL").map(String::from))
+        .unwrap_or_else(|| "http://localhost:3001".to_string());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -160,8 +174,14 @@ pub fn run() {
             open_screen_capture_settings,
         ])
         .setup(move |app| {
-            // 1. Device-token store (Credential Manager / Keychain).
-            let tokens: Arc<DeviceTokenStore> = Arc::new(DeviceTokenStore::load());
+            // 1. Device-token store (file in app data dir; see auth.rs for why
+            //    we don't use the OS credential store right now).
+            let token_path = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir())
+                .join("device_token");
+            let tokens: Arc<DeviceTokenStore> = Arc::new(DeviceTokenStore::load(token_path));
             app.manage(tokens.clone());
 
             // 2. Activity counters + OS event hooks.
