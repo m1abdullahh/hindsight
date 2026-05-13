@@ -17,12 +17,14 @@ import { useToast } from '@/components/ui/use-toast';
 import { ApiError, apiDelete, apiGet } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { queryKeys } from '@/lib/queries';
-import { useCurrentMembership } from '@/lib/session-store';
+import { useCurrentMembership, useUser } from '@/lib/session-store';
 
 interface ScreenshotDetail {
   screenshot: ScreenshotDto;
   fullUrl: string;
   expiresAt: string;
+  ownerUserId: string;
+  orgId: string;
 }
 
 /**
@@ -42,6 +44,7 @@ export function ScreenshotDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const membership = useCurrentMembership();
+  const user = useUser();
 
   const detailQuery = useQuery({
     queryKey: queryKeys.screenshot(screenshotId),
@@ -52,6 +55,18 @@ export function ScreenshotDialog({
     mutationFn: () => apiDelete(`/screenshots/${screenshotId}`),
     onSuccess: () => {
       invalidateOnDelete?.();
+      // Hard delete also decremented TimeEntry.totalActiveSeconds on the
+      // server — invalidate everything that reads from it so the new lower
+      // number propagates without waiting for the next poll.
+      const orgId = detailQuery.data?.orgId;
+      if (orgId) {
+        queryClient.invalidateQueries({
+          queryKey: ['orgs', orgId, 'reports', 'time-totals'],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ['orgs', orgId, 'time-entries'],
+        });
+      }
       // Always nuke the per-screenshot cache too so a stale row can't load.
       queryClient.removeQueries({ queryKey: queryKeys.screenshot(screenshotId) });
       toast({ title: 'Screenshot deleted' });
@@ -73,7 +88,11 @@ export function ScreenshotDialog({
 
   const detail = detailQuery.data;
   const meta = detail?.screenshot;
-  const canDelete = !!membership && (membership.role === 'owner' || membership.role === 'admin');
+  // Owners/admins can delete any capture; a member can delete only their own.
+  const canDelete =
+    !!membership &&
+    !!detail &&
+    (membership.role === 'owner' || membership.role === 'admin' || user?.id === detail.ownerUserId);
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>

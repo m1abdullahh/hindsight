@@ -248,6 +248,12 @@ export interface ScreenshotDetail {
   screenshot: ScreenshotDto;
   fullUrl: string;
   expiresAt: string;
+  // Owner = the user who tracked the time entry this capture belongs to.
+  // Clients use this to decide whether the caller can delete it.
+  ownerUserId: string;
+  // The org this capture lives under — clients use it to invalidate
+  // org-scoped caches (time-totals, time-entries) after a delete.
+  orgId: string;
 }
 
 export const getScreenshot = async (
@@ -288,6 +294,8 @@ export const getScreenshot = async (
     screenshot: toScreenshotDto(row),
     fullUrl: presigned.url,
     expiresAt: presigned.expiresAt.toISOString(),
+    ownerUserId: row.timeEntry.userId,
+    orgId: row.timeEntry.project.orgId,
   };
 };
 
@@ -295,7 +303,14 @@ export const deleteScreenshot = async (caller: Membership, screenshotId: string)
   const row = await prisma.screenshot.findUnique({
     where: { id: screenshotId },
     include: {
-      timeEntry: { include: { project: { select: { orgId: true } } } },
+      timeEntry: {
+        select: {
+          id: true,
+          userId: true,
+          totalActiveSeconds: true,
+          project: { select: { orgId: true, screenshotIntervalMinutes: true } },
+        },
+      },
     },
   });
   if (!row) throw new AppError('not_found', 404, 'screenshot not found');
@@ -303,20 +318,30 @@ export const deleteScreenshot = async (caller: Membership, screenshotId: string)
     throw new AppError('forbidden', 403, 'screenshot not in your org');
   }
 
-  if (!can(caller, { type: 'screenshots:delete' })) {
+  if (!can(caller, { type: 'screenshots:delete', ownerUserId: row.timeEntry.userId })) {
     throw new AppError('forbidden', 403, 'cannot delete this screenshot');
   }
 
-  // Permanent delete: drop the DB row, write the audit log, then remove every
-  // R2 object the screenshot owned. Object deletes happen outside the txn so
-  // a transient R2 hiccup doesn't roll back the DB delete — the row is gone
-  // either way, and orphaned objects are at worst extra storage cost.
+  // Hard delete the row + subtract the screenshot's interval from the parent
+  // TimeEntry.totalActiveSeconds (clamped at 0). Time totals on every report
+  // sum this column, so without decrementing it the reported hours would
+  // outlive the screenshots that backed them.
   const orgId = row.timeEntry.project.orgId;
+  const intervalSeconds = row.timeEntry.project.screenshotIntervalMinutes * 60;
+  const before = row.timeEntry.totalActiveSeconds;
+  const after = Math.max(0, before - intervalSeconds);
+  const subtracted = before - after;
   const objectKeys = [row.s3Key, row.thumbnailS3Key, row.blurredS3Key].filter(
     (k): k is string => typeof k === 'string' && k.length > 0,
   );
 
   await prisma.$transaction(async (tx) => {
+    if (subtracted > 0) {
+      await tx.timeEntry.update({
+        where: { id: row.timeEntryId },
+        data: { totalActiveSeconds: after },
+      });
+    }
     await tx.screenshot.delete({ where: { id: row.id } });
     await writeAudit(tx, {
       orgId,
@@ -327,15 +352,18 @@ export const deleteScreenshot = async (caller: Membership, screenshotId: string)
       metadata: {
         byCaller: caller.userId,
         objectKeys,
+        timeEntryId: row.timeEntryId,
+        subtractedSeconds: subtracted,
       } satisfies Prisma.JsonObject,
     });
   });
 
+  // R2 deletes run outside the txn so a transient R2 hiccup doesn't roll back
+  // the DB delete — the row is gone either way, and orphaned objects are at
+  // worst extra storage cost.
   await Promise.all(
     objectKeys.map((k) =>
       deleteObject(k).catch((e: unknown) => {
-        // Log + swallow — the DB row is gone, leaving an orphan in R2 is
-        // recoverable later; failing the request is not.
         const msg = e instanceof Error ? e.message : String(e);
 
         console.warn(`r2 delete failed for ${k}: ${msg}`);

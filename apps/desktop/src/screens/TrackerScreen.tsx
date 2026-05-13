@@ -1,4 +1,4 @@
-import type { ProjectDto } from '@hindsight/shared/dto';
+import type { ProjectDto, ScreenshotDto, TimeEntryDto } from '@hindsight/shared/dto';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -8,11 +8,14 @@ import {
   Play as PlayIcon,
   Settings as SettingsIcon,
   Square as StopIcon,
+  Trash2,
+  X as CloseIcon,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ActivityBar, type ActivitySegment } from '@/components/ui/activity-bar';
 import { AvatarLive } from '@/components/ui/avatar-live';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -22,7 +25,7 @@ import {
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { useToast } from '@/components/ui/use-toast';
-import { apiGet, apiPatch, apiPost, clearTokenCache } from '@/lib/api';
+import { apiDelete, apiGet, apiPatch, apiPost, clearTokenCache } from '@/lib/api';
 import { formatElapsed } from '@/lib/format-elapsed';
 import { session } from '@/lib/session-store';
 
@@ -146,7 +149,7 @@ export function TrackerScreen() {
         {tab === 'track' && (
           <TrackTab currentOrgId={currentOrgId} organizations={organizations} setOrg={setOrg} />
         )}
-        {tab === 'me' && <ComingSoon label="Your activity will live here." />}
+        {tab === 'me' && <MeTab currentOrgId={currentOrgId} />}
         {tab === 'settings' && <SettingsTab signOut={signOut} />}
       </div>
 
@@ -257,6 +260,13 @@ function TrackTab({
   const activeSec = Math.floor(activeMs / 1000);
   const displaySec = baselineTodaySeconds + activeSec;
 
+  // Mirror live tick values into refs so the periodic flush effect can read
+  // the latest activeSec/idleSeconds without re-subscribing on every tick.
+  const activeSecRef = useRef(activeSec);
+  activeSecRef.current = activeSec;
+  const computeIdleSecondsRef = useRef(computeIdleSeconds);
+  computeIdleSecondsRef.current = computeIdleSeconds;
+
   // Fetch projects on org change
   useEffect(() => {
     if (!currentOrgId) {
@@ -282,21 +292,24 @@ function TrackTab({
     };
   }, [currentOrgId]);
 
-  // Periodic flush of totalActiveSeconds while tracking
+  // Periodic flush of totalActiveSeconds while tracking. We deliberately keep
+  // activeSec/computeIdleSeconds out of deps (read via refs) — otherwise the
+  // 1s live tick would tear down and rebuild the interval every second and
+  // it would never actually fire.
   useEffect(() => {
     if (!tracking || !timeEntryId || !startedAt) return;
     const id = window.setInterval(() => {
       void apiPatch(
         `/time-entries/${timeEntryId}`,
         {
-          totalActiveSeconds: Math.min(86_400, activeSec),
-          totalIdleSeconds: computeIdleSeconds(),
+          totalActiveSeconds: Math.min(86_400, activeSecRef.current),
+          totalIdleSeconds: computeIdleSecondsRef.current(),
         },
         crypto.randomUUID(),
       ).catch(noop);
-    }, 60_000);
+    }, 30_000);
     return () => window.clearInterval(id);
-  }, [tracking, timeEntryId, startedAt, activeSec, computeIdleSeconds]);
+  }, [tracking, timeEntryId, startedAt]);
 
   // Per-project idle threshold (falls back to default when no project loaded).
   const idleThresholdSec = currentProject
@@ -771,12 +784,463 @@ function SettingsTab({ signOut }: { signOut: () => void }) {
   );
 }
 
-function ComingSoon({ label }: { label: string }) {
+// ── Me tab ─────────────────────────────────────────────────────────────
+
+interface TimeEntriesResponse {
+  entries: TimeEntryDto[];
+}
+interface MeScreenshotListItem {
+  screenshot: {
+    id: string;
+    capturedAt: string;
+    activeApp: string | null;
+    activeWindowTitle: string | null;
+  };
+  thumbnailUrl: string | null;
+}
+interface MeScreenshotsResponse {
+  items: MeScreenshotListItem[];
+}
+interface ScreenshotDetailResponse {
+  screenshot: ScreenshotDto;
+  fullUrl: string;
+  expiresAt: string;
+  ownerUserId: string;
+  orgId: string;
+}
+
+function MeTab({ currentOrgId }: { currentOrgId: string | null }) {
+  const user = session((s) => s.user);
+  const memberships = session((s) => s.memberships);
+  const currentMembership = currentOrgId
+    ? (memberships.find((m) => m.orgId === currentOrgId) ?? null)
+    : null;
+  const userId = user?.id ?? null;
+
+  const [totals, setTotals] = useState<TimeTotalRow[]>([]);
+  const [entries, setEntries] = useState<TimeEntryDto[]>([]);
+  const [screenshots, setScreenshots] = useState<MeScreenshotListItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [openShotId, setOpenShotId] = useState<string | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (!currentOrgId || !userId) return;
+    try {
+      const [t, e, s] = await Promise.all([
+        apiGet<TimeTotalsResponse>(
+          `/orgs/${currentOrgId}/reports/time-totals?userId=${encodeURIComponent(userId)}`,
+        ),
+        apiGet<TimeEntriesResponse>(
+          `/orgs/${currentOrgId}/time-entries?userId=${encodeURIComponent(userId)}&limit=5`,
+        ),
+        apiGet<MeScreenshotsResponse>(
+          `/orgs/${currentOrgId}/screenshots?userId=${encodeURIComponent(userId)}&limit=6`,
+        ),
+      ]);
+      setTotals(t.rows);
+      setEntries(e.entries);
+      setScreenshots(s.items);
+      setLoaded(true);
+    } catch {
+      // Silent — next 30s tick will retry.
+    }
+  }, [currentOrgId, userId]);
+
+  // Poll every 30s so the values stay in lockstep with the web dashboard.
+  useEffect(() => {
+    if (!currentOrgId || !userId) return;
+    void refresh();
+    const id = window.setInterval(() => void refresh(), 30_000);
+    return () => window.clearInterval(id);
+  }, [currentOrgId, userId, refresh]);
+
+  const totalSeconds = useMemo(
+    () => totals.reduce((s, r) => s + r.totalActiveSeconds, 0),
+    [totals],
+  );
+  const totalEarned = useMemo(() => totals.reduce((s, r) => s + (r.earnedCents ?? 0), 0), [totals]);
+  const anyEarned = useMemo(() => totals.some((r) => r.earnedCents !== null), [totals]);
+
+  // Default rate = most common non-null per-project rate.
+  const defaultRateCents = useMemo<number | null>(() => {
+    const counts = new Map<number, number>();
+    for (const r of totals) {
+      if (r.hourlyRateCents === null) continue;
+      counts.set(r.hourlyRateCents, (counts.get(r.hourlyRateCents) ?? 0) + 1);
+    }
+    let best: number | null = null;
+    let top = 0;
+    for (const [rate, c] of counts) {
+      if (c > top) {
+        best = rate;
+        top = c;
+      }
+    }
+    return best;
+  }, [totals]);
+
+  const sortedTotals = useMemo(
+    () => [...totals].sort((a, b) => b.totalActiveSeconds - a.totalActiveSeconds),
+    [totals],
+  );
+
+  if (!currentOrgId || !userId) {
+    return (
+      <div className="grid flex-1 place-items-center px-6 text-center text-[13px] text-ink3">
+        Pick an organization to see your stats.
+      </div>
+    );
+  }
+
+  if (!loaded) {
+    return (
+      <div className="grid flex-1 place-items-center px-6 text-center text-[12px] text-ink3">
+        <Spinner className="h-4 w-4" />
+      </div>
+    );
+  }
+
   return (
-    <div className="grid flex-1 place-items-center px-6 text-center text-[13px] text-ink3">
-      {label}
+    <div className="space-y-3.5 px-4 py-3">
+      {/* Member info */}
+      <section className="rounded-lg border border-border bg-background/60 px-3 py-2.5">
+        <h3 className="mb-1.5 text-[10.5px] font-medium uppercase tracking-wide text-ink4">
+          Member
+        </h3>
+        <InfoRow label="Role" value={titleCase(currentMembership?.role ?? 'member')} />
+        <InfoRow
+          label="Joined"
+          value={currentMembership ? formatRelative(currentMembership.createdAt) : '—'}
+        />
+        <InfoRow
+          label="Default rate"
+          value={defaultRateCents !== null ? `${formatMoney(defaultRateCents)}/h` : '—'}
+        />
+        <InfoRow label="Total tracked" value={formatHoursShort(totalSeconds)} />
+        <InfoRow label="Total earned" value={anyEarned ? formatMoney(totalEarned) : '—'} />
+        <InfoRow label="Projects" value={String(totals.length)} />
+      </section>
+
+      {/* Project breakdown */}
+      <section className="rounded-lg border border-border bg-background/60">
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <h3 className="text-[11.5px] font-medium">Project breakdown</h3>
+          <span className="font-mono text-[10px] text-ink4">all time</span>
+        </div>
+        {sortedTotals.length === 0 ? (
+          <p className="px-3 py-5 text-center text-[12px] text-ink3">No tracked time yet.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {sortedTotals.map((r) => {
+              const share = totalSeconds > 0 ? (r.totalActiveSeconds / totalSeconds) * 100 : 0;
+              const accent = projectAccent(r.projectId);
+              return (
+                <li
+                  key={r.projectId}
+                  className="grid grid-cols-12 items-center gap-2 px-3 py-2 text-[12px]"
+                >
+                  <div className="col-span-5 flex items-center gap-1.5 min-w-0">
+                    <span
+                      className="inline-block h-2 w-2 shrink-0 rounded-sm"
+                      style={{ background: accent }}
+                    />
+                    <span className="truncate font-medium">{r.projectName}</span>
+                  </div>
+                  <div className="col-span-3 font-mono tabular-nums text-ink2">
+                    {formatHoursShort(r.totalActiveSeconds)}
+                  </div>
+                  <div className="col-span-2 font-mono tabular-nums text-ink2">
+                    {r.earnedCents !== null ? formatMoney(r.earnedCents) : '—'}
+                  </div>
+                  <div className="col-span-2 flex items-center gap-1">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ width: `${share}%`, background: accent }}
+                      />
+                    </div>
+                    <span className="font-mono text-[9.5px] tabular-nums text-ink4">
+                      {share.toFixed(0)}%
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {/* Recent sessions */}
+      <section className="rounded-lg border border-border bg-background/60">
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <h3 className="text-[11.5px] font-medium">Recent sessions</h3>
+          <span className="font-mono text-[10px] text-ink4">last 5</span>
+        </div>
+        {entries.length === 0 ? (
+          <p className="px-3 py-5 text-center text-[12px] text-ink3">No sessions yet.</p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {entries.map((e) => (
+              <li key={e.id} className="flex items-center justify-between px-3 py-2 text-[12px]">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-[11.5px] text-ink2">
+                    {formatDateTime(e.startedAt)}
+                  </div>
+                  <div className="truncate text-[10.5px] text-ink4">
+                    {e.endedAt ? `→ ${formatDateTime(e.endedAt)}` : 'in progress'}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono font-medium tabular-nums">
+                    {formatHoursShort(e.totalActiveSeconds)}
+                  </div>
+                  <div className="font-mono text-[10px] text-ink4">
+                    {sessionActivityPercent(e).toFixed(0)}% active
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Recent screenshots */}
+      <section className="mb-1 rounded-lg border border-border bg-background/60 px-3 py-2.5">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-[11.5px] font-medium">Recent screenshots</h3>
+          <span className="font-mono text-[10px] text-ink4">last 6</span>
+        </div>
+        {screenshots.length === 0 ? (
+          <p className="py-4 text-center text-[12px] text-ink3">No screenshots yet.</p>
+        ) : (
+          <div className="grid grid-cols-3 gap-1.5">
+            {screenshots.map((it) => (
+              <button
+                key={it.screenshot.id}
+                type="button"
+                onClick={() => setOpenShotId(it.screenshot.id)}
+                className="group relative aspect-video w-full overflow-hidden rounded border border-border bg-muted text-left transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2"
+                title={
+                  it.screenshot.activeApp
+                    ? `${it.screenshot.activeApp} · ${formatRelative(it.screenshot.capturedAt)}`
+                    : formatRelative(it.screenshot.capturedAt)
+                }
+              >
+                {it.thumbnailUrl ? (
+                  <img
+                    src={it.thumbnailUrl}
+                    alt=""
+                    loading="lazy"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="grid h-full place-items-center text-[10px] text-ink4">—</div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {openShotId && (
+        <ScreenshotPreview
+          id={openShotId}
+          onClose={() => setOpenShotId(null)}
+          onDeleted={() => {
+            setOpenShotId(null);
+            void refresh();
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between py-1 text-[12px]">
+      <span className="text-ink3">{label}</span>
+      <span className="font-mono tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function ScreenshotPreview({
+  id,
+  onClose,
+  onDeleted,
+}: {
+  id: string;
+  onClose: () => void;
+  onDeleted?: () => void;
+}) {
+  const { toast } = useToast();
+  const callerUserId = session((s) => s.user?.id ?? null);
+  const memberships = session((s) => s.memberships);
+  const [detail, setDetail] = useState<ScreenshotDetailResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<ScreenshotDetailResponse>(`/screenshots/${id}`)
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Could not load screenshot');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Esc to close (suppressed while a delete is in flight so the user can't
+  // dismiss before the request resolves).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && !deleting) onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose, deleting]);
+
+  // Owner/admin can delete any capture; members can delete only their own.
+  const canDelete = (() => {
+    if (!detail || !callerUserId) return false;
+    const mem = memberships.find((m) => m.orgId === detail.orgId);
+    if (!mem) return false;
+    if (mem.role === 'owner' || mem.role === 'admin') return true;
+    return callerUserId === detail.ownerUserId;
+  })();
+
+  const handleDelete = async (): Promise<void> => {
+    if (deleting || !detail) return;
+    const ok = window.confirm(
+      'Permanently delete this screenshot?\n\nThis also subtracts its tracked interval from your total time.',
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await apiDelete(`/screenshots/${id}`);
+      toast({ title: 'Screenshot deleted' });
+      onDeleted?.();
+      onClose();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Delete failed';
+
+      toast({ title: 'Could not delete', description: msg, variant: 'destructive' });
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3">
+      <div
+        className="absolute inset-0 bg-foreground/40 backdrop-blur-[1px]"
+        onClick={deleting ? undefined : onClose}
+        aria-hidden
+      />
+      <div
+        role="dialog"
+        aria-label="Screenshot preview"
+        className="relative z-10 flex max-h-[92vh] w-full max-w-[460px] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+      >
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="min-w-0 text-[11.5px] text-ink3">
+            {detail
+              ? `${detail.screenshot.activeApp ?? '—'} · ${formatDateTime(detail.screenshot.capturedAt)}`
+              : 'Loading…'}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            disabled={deleting}
+            className="grid h-6 w-6 place-items-center rounded text-ink3 hover:bg-muted disabled:opacity-50"
+          >
+            <CloseIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="flex flex-1 items-center justify-center overflow-auto bg-[#0f1115] p-2">
+          {error ? (
+            <div className="p-6 text-center text-[12px] text-ink3">{error}</div>
+          ) : detail ? (
+            <img
+              src={detail.fullUrl}
+              alt="Full-resolution screenshot"
+              className="max-h-[80vh] w-auto max-w-full object-contain"
+            />
+          ) : (
+            <Spinner className="h-5 w-5 text-ink3" />
+          )}
+        </div>
+        {canDelete && (
+          <div className="flex justify-end border-t border-border px-3 py-2">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+              className="h-8 gap-1.5"
+            >
+              {deleting ? <Spinner className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
+              {deleting ? 'Deleting…' : 'Delete'}
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Me-tab helpers ────────────────────────────────────────────────────
+
+function titleCase(s: string): string {
+  return s.length > 0 ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  const diffSec = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSec < 60) return 'just now';
+  const min = Math.floor(diffSec / 60);
+  if (min < 60) return `${min} minute${min === 1 ? '' : 's'} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
+  const mo = Math.floor(day / 30);
+  if (mo < 12) return `${mo} month${mo === 1 ? '' : 's'} ago`;
+  const yr = Math.floor(mo / 12);
+  return `${yr} year${yr === 1 ? '' : 's'} ago`;
+}
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function sessionActivityPercent(e: TimeEntryDto): number {
+  const active = e.totalActiveSeconds ?? 0;
+  const idle = e.totalIdleSeconds ?? 0;
+  const total = active + idle;
+  if (total <= 0) return 0;
+  return (active / total) * 100;
+}
+
+// Stable color per projectId — same simple hash the web uses, kept inline so
+// the Me tab doesn't pull in a new shared module just for this one helper.
+function projectAccent(projectId: string): string {
+  let h = 0;
+  for (let i = 0; i < projectId.length; i++) h = (h * 31 + projectId.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue}, 62%, 60%)`;
 }
 
 // ── Footer ─────────────────────────────────────────────────────────────
@@ -806,27 +1270,34 @@ function useTodayTotalsForOrg(orgId: string | null): UseTodayTotalsResult {
   const [rowsToday, setRowsToday] = useState<TimeTotalRow[]>([]);
   const [rowsWeek, setRowsWeek] = useState<TimeTotalRow[]>([]);
 
+  // Fetch on org change AND every 30s so the TODAY/WEEK/EARNED tiles follow
+  // the server, matching the web dashboard's polling cadence.
   useEffect(() => {
     if (!orgId) return;
-    const todayFrom = startOfTodayIso();
-    const weekFrom = startOfWeekIso();
     let cancelled = false;
-    Promise.all([
-      apiGet<TimeTotalsResponse>(
-        `/orgs/${orgId}/reports/time-totals?from=${encodeURIComponent(todayFrom)}`,
-      ),
-      apiGet<TimeTotalsResponse>(
-        `/orgs/${orgId}/reports/time-totals?from=${encodeURIComponent(weekFrom)}`,
-      ),
-    ])
-      .then(([t, w]) => {
-        if (cancelled) return;
-        setRowsToday(t.rows);
-        setRowsWeek(w.rows);
-      })
-      .catch(noop);
+    const refresh = () => {
+      const todayFrom = startOfTodayIso();
+      const weekFrom = startOfWeekIso();
+      Promise.all([
+        apiGet<TimeTotalsResponse>(
+          `/orgs/${orgId}/reports/time-totals?from=${encodeURIComponent(todayFrom)}`,
+        ),
+        apiGet<TimeTotalsResponse>(
+          `/orgs/${orgId}/reports/time-totals?from=${encodeURIComponent(weekFrom)}`,
+        ),
+      ])
+        .then(([t, w]) => {
+          if (cancelled) return;
+          setRowsToday(t.rows);
+          setRowsWeek(w.rows);
+        })
+        .catch(noop);
+    };
+    refresh();
+    const id = window.setInterval(refresh, 30_000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
   }, [orgId]);
 

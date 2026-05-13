@@ -16,8 +16,10 @@ export const queryKeys = {
   // { pages, pageParams } cache shape never collides with the flat
   // { items, nextCursor } shape used by the regular `screenshots` query
   // on Overview. Sharing the key crashed useInfiniteQuery on mount.
-  screenshotsInfinite: (orgId: string, filters: { projectId?: string; userId?: string } = {}) =>
-    ['orgs', orgId, 'screenshots', 'infinite', filters] as const,
+  screenshotsInfinite: (
+    orgId: string,
+    filters: { projectId?: string; userId?: string; from?: string; to?: string } = {},
+  ) => ['orgs', orgId, 'screenshots', 'infinite', filters] as const,
   screenshot: (id: string) => ['screenshots', id] as const,
   timeTotals: (
     orgId: string,

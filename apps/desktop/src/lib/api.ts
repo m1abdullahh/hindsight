@@ -91,6 +91,8 @@ export const apiPatch = <T>(path: string, body: unknown, idempotencyKey?: string
   return api<T>(path, opts);
 };
 
+export const apiDelete = <T = void>(path: string) => api<T>(path, { method: 'DELETE' });
+
 export const clearTokenCache = () => {
   cachedToken = null;
 };
