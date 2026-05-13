@@ -76,25 +76,18 @@ fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn screen_capture_marker_path(app: &tauri::AppHandle) -> std::path::PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("screen_capture_granted")
-}
-
 /// Reports OS-level permission status for screen recording. On non-macOS
 /// platforms this always returns Granted so the renderer can skip the gate.
 #[tauri::command]
-fn check_screen_capture_permission(app: tauri::AppHandle) -> permissions::PermissionStatus {
-    permissions::check_screen_capture(&screen_capture_marker_path(&app))
+fn check_screen_capture_permission() -> permissions::PermissionStatus {
+    permissions::check_screen_capture()
 }
 
 /// Triggers the macOS permission dialog (first call only). Returns the
 /// post-request status so the renderer can update its gate immediately.
 #[tauri::command]
-fn request_screen_capture_permission(app: tauri::AppHandle) -> permissions::PermissionStatus {
-    permissions::request_screen_capture(&screen_capture_marker_path(&app))
+fn request_screen_capture_permission() -> permissions::PermissionStatus {
+    permissions::request_screen_capture()
 }
 
 /// Opens System Settings → Privacy & Security → Screen Recording. macOS only;
