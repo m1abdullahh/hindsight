@@ -57,7 +57,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="flex min-h-dvh bg-background">
+    <div className="flex h-dvh bg-background">
       {/* Sidebar — 220px, Option A spec */}
       <aside className="hidden w-[220px] flex-col border-r border-border bg-background px-2.5 py-3.5 md:flex">
         <div className="flex items-center gap-2 px-2 pb-4 text-sm font-semibold tracking-tight">
@@ -250,7 +250,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               portal into this node via document.getElementById('page-header-actions'). */}
           <div id="page-header-actions" className="flex items-center gap-2" />
         </header>
-        <main className="flex-1 overflow-y-auto [scrollbar-gutter:stable]">{children}</main>
+        <main className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">{children}</main>
       </div>
     </div>
   );

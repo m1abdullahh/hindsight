@@ -1,5 +1,10 @@
 import type { MembershipDto, ProjectDto, TimeEntryDto, UserDto } from '@hindsight/shared/dto';
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import {
   Camera as CameraIcon,
@@ -59,18 +64,25 @@ interface TimeEntriesResponse {
   nextCursor: string | null;
 }
 
-type RangePreset = 'today' | 'week' | 'month';
-type TimeWindow = 'all' | 'morning' | 'afternoon' | 'evening' | 'night';
+type RangePreset = 'day' | 'week' | 'month';
 
-// Time-of-day windows applied client-side on top of the date range. `endHour`
-// is exclusive, matching how the user reads "7 AM – 12 PM" (i.e. up to but
-// not including noon).
-const TIME_WINDOWS: Record<TimeWindow, { label: string; startHour: number; endHour: number }> = {
-  all: { label: 'All day', startHour: 0, endHour: 24 },
-  morning: { label: 'Morning · 7 AM – 12 PM', startHour: 7, endHour: 12 },
-  afternoon: { label: 'Afternoon · 12 PM – 5 PM', startHour: 12, endHour: 17 },
-  evening: { label: 'Evening · 5 PM – 10 PM', startHour: 17, endHour: 22 },
-  night: { label: 'Night · 10 PM – 7 AM', startHour: 22, endHour: 31 },
+// Sub-option for the third filter chip; its meaning depends on `RangePreset`.
+// Each map preserves insertion order, which we rely on for menu ordering.
+const DAY_OPTIONS: Record<string, string> = {
+  today: 'Today',
+  yesterday: 'Yesterday',
+  'last-2': 'Last 2 Days',
+  'last-3': 'Last 3 Days',
+};
+const WEEK_OPTIONS: Record<string, string> = {
+  current: 'Current Week',
+  previous: 'Previous Week',
+  'last-2': 'Last 2 Weeks',
+  'last-3': 'Last 3 Weeks',
+};
+const MONTH_OPTIONS: Record<string, string> = {
+  current: 'Current Month',
+  previous: 'Previous Month',
 };
 
 const PAGE_LIMIT = 60;
@@ -82,21 +94,6 @@ const PALETTE: [string, string][] = [
   ['#e2eef9', '#1d4ed8'],
 ];
 
-const MONTH_SHORT = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
-
 export const Route = createFileRoute('/_app/orgs/$orgId/screenshots')({
   component: ScreenshotsPage,
 });
@@ -106,11 +103,11 @@ function startOfDay(d: Date): Date {
   r.setHours(0, 0, 0, 0);
   return r;
 }
+// Monday-start week.
 function startOfWeek(d: Date): Date {
   const r = startOfDay(d);
-  const day = r.getDay();
-  const diff = day === 0 ? 6 : day - 1;
-  r.setDate(r.getDate() - diff);
+  const dow = (r.getDay() + 6) % 7;
+  r.setDate(r.getDate() - dow);
   return r;
 }
 function startOfMonth(d: Date): Date {
@@ -125,45 +122,87 @@ function addMonths(d: Date, n: number): Date {
   return new Date(d.getFullYear(), d.getMonth() + n, 1);
 }
 
-function rangeFor(preset: RangePreset): { from: Date; to: Date; eyebrow: string; chip: string } {
+function rangeFor(
+  preset: RangePreset,
+  subOption: string,
+): { from: Date; to: Date; eyebrow: string; chip: string } {
   const now = new Date();
-  if (preset === 'today') {
-    const from = startOfDay(now);
-    const to = addDays(from, 1);
-    return {
-      from,
-      to,
-      eyebrow: 'CAPTURES TODAY',
-      chip: `Today · 7 AM – now`,
-    };
+  if (preset === 'day') {
+    const today = startOfDay(now);
+    const label = DAY_OPTIONS[subOption] ?? DAY_OPTIONS['today']!;
+    let from: Date;
+    let to: Date;
+    switch (subOption) {
+      case 'yesterday':
+        from = addDays(today, -1);
+        to = today;
+        break;
+      case 'last-2':
+        from = addDays(today, -1);
+        to = addDays(today, 1);
+        break;
+      case 'last-3':
+        from = addDays(today, -2);
+        to = addDays(today, 1);
+        break;
+      default:
+        from = today;
+        to = addDays(today, 1);
+        break;
+    }
+    return { from, to, eyebrow: `CAPTURES · ${label.toUpperCase()}`, chip: label };
   }
-  if (preset === 'month') {
-    const from = startOfMonth(now);
-    const to = addMonths(from, 1);
-    return {
-      from,
-      to,
-      eyebrow: 'CAPTURES THIS MONTH',
-      chip: `Month · ${MONTH_SHORT[from.getMonth()]} ${from.getFullYear()}`,
-    };
+  if (preset === 'week') {
+    const currentWeekStart = startOfWeek(now);
+    const nextWeekStart = addDays(currentWeekStart, 7);
+    const label = WEEK_OPTIONS[subOption] ?? WEEK_OPTIONS['current']!;
+    let from: Date;
+    let to: Date;
+    switch (subOption) {
+      case 'previous':
+        from = addDays(currentWeekStart, -7);
+        to = currentWeekStart;
+        break;
+      case 'last-2':
+        from = addDays(currentWeekStart, -7);
+        to = nextWeekStart;
+        break;
+      case 'last-3':
+        from = addDays(currentWeekStart, -14);
+        to = nextWeekStart;
+        break;
+      default:
+        from = currentWeekStart;
+        to = nextWeekStart;
+        break;
+    }
+    return { from, to, eyebrow: `CAPTURES · ${label.toUpperCase()}`, chip: label };
   }
-  const from = startOfWeek(now);
-  const to = addDays(from, 7);
-  const end = addDays(from, 6);
+  // month
+  const isPrevious = subOption === 'previous';
+  const current = startOfMonth(now);
+  const from = isPrevious ? addMonths(current, -1) : current;
+  const to = isPrevious ? current : addMonths(current, 1);
   return {
     from,
     to,
-    eyebrow: 'CAPTURES THIS WEEK',
-    chip: `Week · ${MONTH_SHORT[from.getMonth()]} ${from.getDate()} – ${MONTH_SHORT[end.getMonth()]} ${end.getDate()}`,
+    eyebrow: isPrevious ? 'CAPTURES LAST MONTH' : 'CAPTURES THIS MONTH',
+    chip: isPrevious ? 'Previous Month' : 'Current Month',
   };
+}
+
+function defaultSubOption(preset: RangePreset): string {
+  if (preset === 'day') return 'today';
+  if (preset === 'week') return 'current';
+  return 'current';
 }
 
 function ScreenshotsPage() {
   const params = Route.useParams();
-  const [range, setRange] = useState<RangePreset>('today');
+  const [range, setRange] = useState<RangePreset>('day');
+  const [subOption, setSubOption] = useState<string>(() => defaultSubOption('day'));
   const [memberFilter, setMemberFilter] = useState<string>('all');
   const [projectFilter, setProjectFilter] = useState<string>('all');
-  const [timeWindow, setTimeWindow] = useState<TimeWindow>('all');
   const [showIdle, setShowIdle] = useState(true);
   const [blurredOnly, setBlurredOnly] = useState(false);
   // Screenshot currently open in the full-image modal; null = closed.
@@ -171,11 +210,20 @@ function ScreenshotsPage() {
 
   const queryClient = useQueryClient();
 
-  const { from, to, eyebrow, chip } = useMemo(() => rangeFor(range), [range]);
-  const timeChipLabel = useMemo(() => {
-    if (timeWindow !== 'all') return TIME_WINDOWS[timeWindow].label;
-    return chip;
-  }, [timeWindow, chip]);
+  const { from, to, eyebrow, chip } = useMemo(() => rangeFor(range, subOption), [range, subOption]);
+
+  // When the top range changes, snap the sub-option to a sensible default
+  // (today's weekday / current week-of-month / current month).
+  const onRangeChange = (next: RangePreset) => {
+    setRange(next);
+    setSubOption(defaultSubOption(next));
+  };
+
+  // Options for the third filter chip — change based on the top range.
+  const subOptions = useMemo<{ value: string; label: string }[]>(() => {
+    const map = range === 'day' ? DAY_OPTIONS : range === 'week' ? WEEK_OPTIONS : MONTH_OPTIONS;
+    return Object.entries(map).map(([value, label]) => ({ value, label }));
+  }, [range]);
 
   const membersQuery = useQuery({
     queryKey: queryKeys.members(params.orgId),
@@ -188,22 +236,29 @@ function ScreenshotsPage() {
       apiGet<ProjectsResponse>(`/orgs/${params.orgId}/projects`, { includeArchived: true }),
   });
 
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
   const screenshotsQuery = useInfiniteQuery({
     queryKey: queryKeys.screenshotsInfinite(params.orgId, {
       ...(projectFilter !== 'all' ? { projectId: projectFilter } : {}),
       ...(memberFilter !== 'all' ? { userId: memberFilter } : {}),
+      from: fromIso,
+      to: toIso,
     }),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       apiGet<ScreenshotsResponse>(`/orgs/${params.orgId}/screenshots`, {
         limit: PAGE_LIMIT,
-        from: from.toISOString(),
-        to: to.toISOString(),
+        from: fromIso,
+        to: toIso,
         ...(projectFilter !== 'all' ? { projectId: projectFilter } : {}),
         ...(memberFilter !== 'all' ? { userId: memberFilter } : {}),
         ...(pageParam ? { cursor: pageParam } : {}),
       }),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
+    // Keep showing the previous grid while a new filter is fetching so the
+    // page doesn't blank out and feel broken on every click.
+    placeholderData: keepPreviousData,
     refetchInterval: (q) => {
       const pages = q.state.data?.pages ?? [];
       const anyPending = pages.some((p) =>
@@ -241,18 +296,14 @@ function ScreenshotsPage() {
 
   const items = screenshotsQuery.data?.pages.flatMap((p) => p.items) ?? [];
 
-  // Apply client-side filters (time-of-day window, show-idle, blurred-only).
+  // Apply client-side filters (show-idle, blurred-only).
   const visible = useMemo(() => {
-    const win = TIME_WINDOWS[timeWindow];
     return items.filter((it) => {
       if (blurredOnly && !it.screenshot.blurred) return false;
       if (!showIdle && isIdle(it)) return false;
-      if (timeWindow !== 'all' && !hourInWindow(it.screenshot.capturedAt, win)) {
-        return false;
-      }
       return true;
     });
-  }, [items, showIdle, blurredOnly, timeWindow]);
+  }, [items, showIdle, blurredOnly]);
 
   const buckets = useMemo(() => groupByHour(visible), [visible]);
   const totalCount = items.length;
@@ -288,7 +339,7 @@ function ScreenshotsPage() {
     return (
       <div className="px-7 py-6">
         <HeaderActionsPortal>
-          <RangeSegmented value={range} onChange={setRange} />
+          <RangeSegmented value={range} onChange={onRangeChange} />
         </HeaderActionsPortal>
         <PageHeader kicker="Loading…" title="Screenshots" subtitle="Loading recent captures…" />
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
@@ -303,7 +354,7 @@ function ScreenshotsPage() {
   return (
     <div className="px-7 py-6">
       <HeaderActionsPortal>
-        <RangeSegmented value={range} onChange={setRange} />
+        <RangeSegmented value={range} onChange={onRangeChange} />
       </HeaderActionsPortal>
 
       <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -359,13 +410,10 @@ function ScreenshotsPage() {
         />
         <FilterChip
           icon={<Clock className="h-3.5 w-3.5" />}
-          label={timeChipLabel}
-          options={(Object.keys(TIME_WINDOWS) as TimeWindow[]).map((k) => ({
-            value: k,
-            label: k === 'all' ? `All day · ${chip}` : TIME_WINDOWS[k].label,
-          }))}
-          value={timeWindow}
-          onChange={(v) => setTimeWindow(v as TimeWindow)}
+          label={chip}
+          options={subOptions}
+          value={subOption}
+          onChange={setSubOption}
         />
         <div className="ml-auto flex items-center gap-3">
           <label className="flex items-center gap-1.5 text-[12.5px] text-ink2">
@@ -389,7 +437,16 @@ function ScreenshotsPage() {
         </div>
       </div>
 
-      {buckets.length === 0 ? (
+      {screenshotsQuery.isPlaceholderData ? (
+        // A filter change triggered a refetch — replace the old grid with a
+        // skeleton while the new range loads. (Background polls do NOT trip
+        // isPlaceholderData, so 30s refetches don't flash skeleton.)
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
+          {Array.from({ length: 16 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-video w-full" />
+          ))}
+        </div>
+      ) : buckets.length === 0 ? (
         <EmptyState
           icon={<CameraIcon className="h-7 w-7" />}
           title={blurredOnly ? 'No blurred captures yet.' : 'No screenshots in this range.'}
@@ -545,13 +602,6 @@ function Thumbnail({
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
-
-function hourInWindow(iso: string, win: { startHour: number; endHour: number }): boolean {
-  const h = new Date(iso).getHours();
-  // Windows that wrap past midnight (e.g. 22 → 31 meaning 10 PM – 7 AM).
-  if (win.endHour > 24) return h >= win.startHour || h < win.endHour - 24;
-  return h >= win.startHour && h < win.endHour;
-}
 
 function isIdle(it: ScreenshotListItem): boolean {
   return (
@@ -714,7 +764,7 @@ function RangeSegmented({
   onChange: (v: RangePreset) => void;
 }) {
   const items: { key: RangePreset; label: string }[] = [
-    { key: 'today', label: 'Today' },
+    { key: 'day', label: 'Day' },
     { key: 'week', label: 'Week' },
     { key: 'month', label: 'Month' },
   ];

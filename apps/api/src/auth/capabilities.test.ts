@@ -86,10 +86,19 @@ const cases: MatrixCase[] = [
   { role: 'member', action: { type: 'screenshots:read', ownerUserId: 'u-other' }, expected: false },
   { role: 'member', action: { type: 'screenshots:read', ownerUserId: 'u-actor' }, expected: true },
 
-  // screenshots:delete — admin/owner only.
-  { role: 'owner', action: { type: 'screenshots:delete' }, expected: true },
-  { role: 'admin', action: { type: 'screenshots:delete' }, expected: true },
-  { role: 'member', action: { type: 'screenshots:delete' }, expected: false },
+  // screenshots:delete — owner/admin always; member only own.
+  { role: 'owner', action: { type: 'screenshots:delete', ownerUserId: 'u-other' }, expected: true },
+  { role: 'admin', action: { type: 'screenshots:delete', ownerUserId: 'u-other' }, expected: true },
+  {
+    role: 'member',
+    action: { type: 'screenshots:delete', ownerUserId: 'u-other' },
+    expected: false,
+  },
+  {
+    role: 'member',
+    action: { type: 'screenshots:delete', ownerUserId: 'u-actor' },
+    expected: true,
+  },
 ];
 
 describe('capability matrix', () => {

@@ -15,7 +15,7 @@ export type Action =
   | { type: 'projects:read'; assignedToCaller: boolean }
   | { type: 'time_entries:read_all' }
   | { type: 'screenshots:read'; ownerUserId: string }
-  | { type: 'screenshots:delete' }
+  | { type: 'screenshots:delete'; ownerUserId: string }
   | { type: 'audit:read' }
   | { type: 'devices:register' };
 
@@ -47,8 +47,9 @@ export const can = (m: Membership, action: Action): boolean => {
       return m.userId === action.ownerUserId;
 
     case 'screenshots:delete':
-      // Admins/owners only — members can no longer delete captures.
-      return m.role === 'owner' || m.role === 'admin';
+      // Admins/owners can delete any capture; members can delete only their own.
+      if (m.role === 'owner' || m.role === 'admin') return true;
+      return m.userId === action.ownerUserId;
 
     case 'devices:register':
       return true;
