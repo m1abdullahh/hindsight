@@ -25,33 +25,31 @@ pub enum PermissionStatus {
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
 /// Current screen-capture permission. On non-macOS platforms we always
 /// report Granted so the renderer can skip the permission gate entirely.
 ///
-/// On macOS, `CGPreflightScreenCaptureAccess()` is unreliable on unsigned
-/// builds (returns false even when the OS would actually allow capture), so
-/// we don't use it. Instead:
-///   1. Fast path: a marker file at `marker_path` means we've previously
-///      verified that real captures work; trust that and return Granted.
-///   2. Slow path: attempt a real capture and inspect the pixels. macOS
-///      returns a blank/black image when permission is denied, so any
-///      non-zero pixel sample is sufficient evidence of a grant. On success
-///      we persist the marker so future launches skip the probe entirely.
+/// Signal priority on macOS:
+///   1. `CGPreflightScreenCaptureAccess()` — the canonical Apple API.
+///      Reliable for properly signed apps (was unreliable historically
+///      for unsigned/ad-hoc builds, which is why a marker fallback exists).
+///   2. Marker file persisted after a prior successful grant. Defensive
+///      fallback for the rare case where preflight returns a false negative.
 pub fn check_screen_capture(marker_path: &Path) -> PermissionStatus {
     #[cfg(target_os = "macos")]
     {
+        let granted = unsafe { CGPreflightScreenCaptureAccess() };
+        if granted {
+            persist_marker(marker_path);
+            return PermissionStatus::Granted;
+        }
         if marker_path.exists() {
             return PermissionStatus::Granted;
         }
-        if probe_capture() {
-            persist_marker(marker_path);
-            PermissionStatus::Granted
-        } else {
-            PermissionStatus::Denied
-        }
+        PermissionStatus::Denied
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -72,39 +70,10 @@ pub fn request_screen_capture(marker_path: &Path) -> PermissionStatus {
 }
 
 #[cfg(target_os = "macos")]
-fn probe_capture() -> bool {
-    use screenshots::Screen;
-
-    let screens = match Screen::all() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let Some(screen) = screens.first() else {
-        return false;
-    };
-    let img = match screen.capture() {
-        Ok(i) => i,
-        Err(_) => return false,
-    };
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
-        return false;
-    }
-    // Sample ~100 pixels across the image. macOS hands back an all-zero
-    // image when permission is denied, so a single non-zero pixel is
-    // sufficient evidence the capture actually saw the screen.
-    let total = (w as usize).saturating_mul(h as usize);
-    let stride = (total / 100).max(1);
-    for (_, _, pixel) in img.enumerate_pixels().step_by(stride) {
-        if pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(target_os = "macos")]
 fn persist_marker(marker_path: &Path) {
+    if marker_path.exists() {
+        return;
+    }
     if let Some(parent) = marker_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
