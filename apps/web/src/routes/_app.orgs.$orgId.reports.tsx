@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { createFileRoute } from '@tanstack/react-router';
-import { Download, Settings2 } from 'lucide-react';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { Download, Settings2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { z } from 'zod';
 
 import { AvatarLive } from '@/components/ui/avatar-live';
 import { Button } from '@/components/ui/button';
@@ -84,8 +85,14 @@ function useColumnPrefs(): [ColumnPrefs, (next: Partial<ColumnPrefs>) => void, (
   return [prefs, update, reset];
 }
 
+const reportsSearch = z.object({
+  userId: z.string().optional(),
+  projectId: z.string().optional(),
+});
+
 export const Route = createFileRoute('/_app/orgs/$orgId/reports')({
   component: OrgReportsPage,
+  validateSearch: reportsSearch,
 });
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -162,12 +169,22 @@ function rangeFor(preset: RangePreset): { from: Date; to: Date; label: string } 
 
 function OrgReportsPage() {
   const params = Route.useParams();
+  const search = Route.useSearch();
+  const navigate = useNavigate();
   const [range, setRange] = useState<RangePreset>('week');
   const [pivot, setPivot] = useState<Pivot>('by-project');
   const [prefs, updatePrefs, resetPrefs] = useColumnPrefs();
 
   const { from, to, label } = useMemo(() => rangeFor(range), [range]);
-  const filters = useMemo(() => ({ from: from.toISOString(), to: to.toISOString() }), [from, to]);
+  const filters = useMemo(
+    () => ({
+      from: from.toISOString(),
+      to: to.toISOString(),
+      ...(search.userId ? { userId: search.userId } : {}),
+      ...(search.projectId ? { projectId: search.projectId } : {}),
+    }),
+    [from, to, search.userId, search.projectId],
+  );
 
   const query = useQuery({
     queryKey: queryKeys.timeTotals(params.orgId, filters),
@@ -175,6 +192,23 @@ function OrgReportsPage() {
   });
 
   const rows = query.data?.rows ?? [];
+  const activeFilter = useMemo(() => {
+    if (search.userId) {
+      const r = rows.find((row) => row.userId === search.userId);
+      return { kind: 'user' as const, label: r?.userName ?? 'this user' };
+    }
+    if (search.projectId) {
+      const r = rows.find((row) => row.projectId === search.projectId);
+      return { kind: 'project' as const, label: r?.projectName ?? 'this project' };
+    }
+    return null;
+  }, [rows, search.userId, search.projectId]);
+  const clearFilter = () =>
+    void navigate({
+      to: '/orgs/$orgId/reports',
+      params: { orgId: params.orgId },
+      search: {},
+    });
   const totalSeconds = rows.reduce((s, r) => s + r.totalActiveSeconds, 0);
   const totalEarned = rows.reduce((s, r) => s + (r.earnedCents ?? 0), 0);
   const anyEarned = rows.some((r) => r.earnedCents !== null);
@@ -225,6 +259,20 @@ function OrgReportsPage() {
           </div>
           <h1 className="text-[26px] font-semibold tracking-tight">Reports</h1>
           <p className="mt-1 text-[13px] text-ink3">Tracked time across projects and members.</p>
+          {activeFilter && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-[11.5px] text-ink2">
+              <span className="text-ink4">Filtered by {activeFilter.kind}:</span>
+              <span className="font-medium text-foreground">{activeFilter.label}</span>
+              <button
+                type="button"
+                onClick={clearFilter}
+                className="ml-0.5 grid h-4 w-4 place-items-center rounded-full text-ink3 hover:bg-background hover:text-foreground"
+                aria-label="Clear filter"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <CustomizeMenu prefs={prefs} onChange={updatePrefs} onReset={resetPrefs} />

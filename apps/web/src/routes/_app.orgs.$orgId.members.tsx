@@ -6,7 +6,7 @@ import type {
   UserDto,
 } from '@hindsight/shared/dto';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -109,18 +109,33 @@ const formatHm = (seconds: number): string => {
   return `${h}h ${m.toString().padStart(2, '0')}m`;
 };
 
+const membersSearch = z.object({
+  member: z.string().optional(),
+});
+
 export const Route = createFileRoute('/_app/orgs/$orgId/members')({
   component: MembersPage,
+  validateSearch: membersSearch,
 });
 
 function MembersPage() {
   const params = Route.useParams();
+  const searchParams = Route.useSearch();
+  const navigate = useNavigate();
   const canInvite = useCan('members:invite');
   const canManage = useCan('members:manage');
   const currentUser = useUser();
   const [search, setSearch] = useState('');
   // ID of the member whose stats sub-panel is currently open; null = closed.
-  const [statsUserId, setStatsUserId] = useState<string | null>(null);
+  // Sourced from the URL so deep-links + back-button restore the pane.
+  const statsUserId = searchParams.member ?? null;
+  const setStatsUserId = (userId: string | null) => {
+    void navigate({
+      to: '/orgs/$orgId/members',
+      params: { orgId: params.orgId },
+      search: { member: userId ?? undefined },
+    });
+  };
 
   const membersQuery = useQuery({
     queryKey: queryKeys.members(params.orgId),
@@ -652,7 +667,7 @@ function MemberStatsPanel({
     <div className="fixed inset-0 z-50">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-foreground/30 backdrop-blur-[1px]"
+        className="absolute inset-0 bg-foreground/30 backdrop-blur-[1px] animate-in fade-in-0 duration-200"
         onClick={onClose}
         aria-hidden
       />
@@ -660,7 +675,7 @@ function MemberStatsPanel({
       <aside
         role="dialog"
         aria-label="Member details"
-        className="absolute right-0 top-0 flex h-full w-[520px] max-w-[100vw] flex-col border-l border-border bg-card shadow-2xl"
+        className="absolute right-0 top-0 flex h-full w-[520px] max-w-[100vw] flex-col border-l border-border bg-card shadow-2xl animate-in slide-in-from-right-8 fade-in-0 duration-200"
       >
         <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
           {member ? (

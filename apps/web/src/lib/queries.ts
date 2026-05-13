@@ -29,4 +29,5 @@ export const queryKeys = {
     } = {},
   ) => ['orgs', orgId, 'reports', 'time-totals', filters] as const,
   presence: (orgId: string) => ['orgs', orgId, 'presence'] as const,
+  search: (orgId: string, q: string) => ['orgs', orgId, 'search', q] as const,
 };

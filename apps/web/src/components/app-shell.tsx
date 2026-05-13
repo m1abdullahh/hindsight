@@ -12,8 +12,9 @@ import {
   Settings,
   Users,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
+import { CommandPalette } from '@/components/command-palette';
 import { AvatarLive } from '@/components/ui/avatar-live';
 import {
   DropdownMenu,
@@ -41,6 +42,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const currentMembership = currentOrgId
     ? (memberships.find((m) => m.orgId === currentOrgId) ?? null)
     : null;
+
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
+        // Don't fight other ⌘K bindings inside inputs that handle it themselves;
+        // there aren't any in this app today but preventDefault scopes it cleanly.
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const onLogout = async () => {
     try {
@@ -241,17 +257,23 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span id="page-breadcrumb-suffix" className="flex items-center" />
           </div>
           <div className="flex-1" />
-          <div className="hidden h-7 w-[200px] items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-ink3 sm:flex">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="hidden h-7 w-[200px] items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-ink3 transition-colors hover:bg-muted sm:flex"
+            aria-label="Open search"
+          >
             <Search className="h-3 w-3" />
             <span>Search…</span>
             <span className="ml-auto font-mono text-[10.5px]">⌘K</span>
-          </div>
+          </button>
           {/* Slot for page-specific header actions (e.g. "Invite member"). Pages
               portal into this node via document.getElementById('page-header-actions'). */}
           <div id="page-header-actions" className="flex items-center gap-2" />
         </header>
         <main className="flex-1 overflow-y-auto [scrollbar-gutter:stable]">{children}</main>
       </div>
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} orgId={currentOrgId} />
     </div>
   );
 }
