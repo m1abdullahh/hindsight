@@ -1,5 +1,6 @@
 import type { MembershipDto, OrganizationDto, UserDto } from '@hindsight/shared/dto';
 import { invoke } from '@tauri-apps/api/core';
+import { hostname, platform } from '@tauri-apps/plugin-os';
 import { useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,27 @@ interface RegisterResponse {
   deviceToken: string;
 }
 
-const deviceName = (): string => `Windows · ${new Date().toISOString().slice(0, 10)}`;
+type DeviceOs = 'windows' | 'macos' | 'linux';
+
+const OS_LABEL: Record<DeviceOs, string> = {
+  windows: 'Windows',
+  macos: 'Mac',
+  linux: 'Linux',
+};
+
+// Pull real device info from the OS via plugin-os. Tauri's `platform()`
+// returns one of "linux" | "macos" | "windows" | "ios" | "android" | ...;
+// the API only accepts the three desktop targets so anything exotic falls
+// back to linux. `hostname()` may return null on platforms where the call
+// isn't available; in that case we synthesize a readable name like
+// "Mac · 2026-05-13".
+const getDeviceInfo = async (): Promise<{ deviceName: string; os: DeviceOs }> => {
+  const raw = await platform();
+  const os: DeviceOs = raw === 'macos' || raw === 'windows' ? raw : 'linux';
+  const host = ((await hostname().catch(() => null)) ?? '').trim().replace(/\.local$/, '');
+  const fallback = `${OS_LABEL[os]} · ${new Date().toISOString().slice(0, 10)}`;
+  return { deviceName: (host || fallback).slice(0, 100), os };
+};
 
 export function LoginScreen() {
   const setLoggedIn = session((s) => s.setLoggedIn);
@@ -54,9 +75,10 @@ export function LoginScreen() {
       // 2. Register a device using the web token explicitly (override the
       //    cached/stored token for this single call).
       const idemKey = crypto.randomUUID();
+      const { deviceName, os } = await getDeviceInfo();
       const reg = await apiPost<RegisterResponse>(
         '/devices/register',
-        { deviceName: deviceName(), os: 'windows', appVersion: __APP_VERSION__ },
+        { deviceName, os, appVersion: __APP_VERSION__ },
         idemKey,
         login.token,
       );
