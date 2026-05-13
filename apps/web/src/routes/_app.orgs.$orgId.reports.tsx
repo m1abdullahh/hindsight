@@ -38,6 +38,21 @@ interface TimeTotalsResponse {
   range: { from: string | null; to: string | null };
 }
 
+interface TimeTotalByDaySegment {
+  projectId: string;
+  projectName: string;
+  totalActiveSeconds: number;
+}
+interface TimeTotalByDayRow {
+  index: number;
+  totalActiveSeconds: number;
+  segments: TimeTotalByDaySegment[];
+}
+interface TimeTotalsByDayResponse {
+  days: TimeTotalByDayRow[];
+  range: { from: string; to: string };
+}
+
 type RangePreset = 'today' | 'week' | 'month';
 type Pivot = 'by-project' | 'by-user' | 'by-day';
 
@@ -191,6 +206,14 @@ function OrgReportsPage() {
     queryFn: () => apiGet<TimeTotalsResponse>(`/orgs/${params.orgId}/reports/time-totals`, filters),
   });
 
+  // Real per-day breakdown from the server. Same filter shape; cached
+  // under a sibling key so the table query above isn't disturbed.
+  const byDayQuery = useQuery({
+    queryKey: ['orgs', params.orgId, 'reports', 'time-totals-by-day', filters] as const,
+    queryFn: () =>
+      apiGet<TimeTotalsByDayResponse>(`/orgs/${params.orgId}/reports/time-totals-by-day`, filters),
+  });
+
   const rows = query.data?.rows ?? [];
   const activeFilter = useMemo(() => {
     if (search.userId) {
@@ -215,13 +238,29 @@ function OrgReportsPage() {
 
   const projects = useMemo(() => groupProjects(rows), [rows]);
   const usersGroup = useMemo(() => groupUsers(rows), [rows]);
-  // Build per-day stacked data. Real per-day breakdown would require a new
-  // endpoint (or fetching individual time entries); for now we distribute
-  // each project's total across the visible days using a deterministic
-  // seeded weighting so the chart matches the table without flicker on
-  // re-render.
+  // Per-day stack comes straight from the server now (real totals, bucketed
+  // into 24h windows since `from`). We just shape it for the chart and
+  // pad missing tail days if the server's response is shorter than
+  // expected (e.g. empty range).
   const dayCount = range === 'today' ? 1 : range === 'month' ? daysInMonth(from) : 7;
-  const stacked = useMemo(() => buildStackedByDay(projects, dayCount), [projects, dayCount]);
+  const stacked = useMemo(() => {
+    const days = byDayQuery.data?.days ?? [];
+    const out: {
+      day: number;
+      total: number;
+      segments: { projectId: string; seconds: number }[];
+    }[] = [];
+    for (let i = 0; i < dayCount; i++) {
+      const d = days[i];
+      out.push({
+        day: i,
+        total: d?.totalActiveSeconds ?? 0,
+        segments:
+          d?.segments.map((s) => ({ projectId: s.projectId, seconds: s.totalActiveSeconds })) ?? [],
+      });
+    }
+    return out;
+  }, [byDayQuery.data, dayCount]);
 
   const onExportCsv = () => {
     const headers = ['Project', 'Member', 'Time', 'Rate', 'Earned'];
@@ -303,7 +342,7 @@ function OrgReportsPage() {
         </div>
       </div>
 
-      {query.isLoading ? (
+      {query.isLoading || byDayQuery.isLoading ? (
         <Skeleton className="h-60 w-full" />
       ) : query.error ? (
         <div className="rounded-md border border-dashed py-12 text-center text-sm text-destructive">
@@ -434,42 +473,11 @@ function groupUsers(rows: TimeTotalRow[]): UserGroup[] {
 // Deterministic per-project distribution of seconds across N days. Sum across
 // days equals the project's true total — so daily bar tops are the per-day
 // hours for the period. Per-day shape is seeded by projectId for stability.
-function buildStackedByDay(
-  projects: ProjectGroup[],
-  dayCount: number,
-): { day: number; total: number; segments: { projectId: string; seconds: number }[] }[] {
-  const days = Array.from({ length: dayCount }, (_, day) => ({
-    day,
-    total: 0,
-    segments: [] as { projectId: string; seconds: number }[],
-  }));
-  for (const p of projects) {
-    const weights: number[] = [];
-    let seed = 0;
-    for (let i = 0; i < p.projectId.length; i++) seed = (seed * 31 + p.projectId.charCodeAt(i)) | 0;
-    const rand = (n: number) => {
-      const x = Math.sin((seed + 1) * (n + 7.13)) * 10000;
-      return x - Math.floor(x);
-    };
-    let sum = 0;
-    for (let d = 0; d < dayCount; d++) {
-      // Weekends get a lower base weight so the visual leans weekday-heavy.
-      const isWeekend = dayCount === 7 && (d === 5 || d === 6);
-      const w = (isWeekend ? 0.2 : 1.0) * (0.5 + rand(d));
-      weights.push(w);
-      sum += w;
-    }
-    for (let d = 0; d < dayCount; d++) {
-      const w = weights[d] ?? 0;
-      const seconds = Math.round((p.totalSeconds * w) / (sum || 1));
-      const day = days[d];
-      if (!day) continue;
-      day.segments.push({ projectId: p.projectId, seconds });
-      day.total += seconds;
-    }
-  }
-  return days;
-}
+type StackedDays = {
+  day: number;
+  total: number;
+  segments: { projectId: string; seconds: number }[];
+}[];
 
 function daysInMonth(from: Date): number {
   return new Date(from.getFullYear(), from.getMonth() + 1, 0).getDate();
@@ -484,7 +492,7 @@ function StackedBarChart({
   rangePreset,
 }: {
   title: string;
-  data: ReturnType<typeof buildStackedByDay>;
+  data: StackedDays;
   legend: { key: string; label: string; color: string }[];
   rangePreset: RangePreset;
 }) {
@@ -727,7 +735,7 @@ function DayTable({
   projects,
   prefs,
 }: {
-  stacked: ReturnType<typeof buildStackedByDay>;
+  stacked: StackedDays;
   rangePreset: RangePreset;
   from: Date;
   projects: ProjectGroup[];

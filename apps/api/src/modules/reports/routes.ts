@@ -5,8 +5,8 @@ import { requireAuth } from '../../middleware/bearer-auth.js';
 import { orgScope } from '../../middleware/org-scope.js';
 import { validate } from '../../middleware/validate.js';
 
-import { timeTotalsHandler } from './handlers.js';
-import { timeTotalsQuery } from './schemas.js';
+import { timeTotalsByDayHandler, timeTotalsHandler } from './handlers.js';
+import { timeTotalsByDayQuery, timeTotalsQuery } from './schemas.js';
 
 export const reportsRouter: Router = Router();
 
@@ -16,4 +16,12 @@ reportsRouter.get(
   orgScope(),
   validate(timeTotalsQuery, 'query'),
   asyncHandler(timeTotalsHandler),
+);
+
+reportsRouter.get(
+  '/orgs/:orgId/reports/time-totals-by-day',
+  requireAuth(),
+  orgScope(),
+  validate(timeTotalsByDayQuery, 'query'),
+  asyncHandler(timeTotalsByDayHandler),
 );
