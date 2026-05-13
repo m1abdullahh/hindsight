@@ -4,7 +4,6 @@ import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 
 import { Toaster } from './components/ui/toaster';
-import { WindowChrome } from './components/window-chrome';
 import { LoginScreen } from './screens/LoginScreen';
 import { PermissionGateScreen } from './screens/PermissionGateScreen';
 import { TrackerScreen } from './screens/TrackerScreen';
@@ -83,7 +82,6 @@ export function App() {
 
   return (
     <div className="flex h-dvh flex-col bg-background">
-      <WindowChrome />
       <div className="flex flex-1 flex-col overflow-hidden">
         {booting ? (
           <div className="flex flex-1 items-center justify-center text-[13px] text-ink3">
