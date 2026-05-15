@@ -118,6 +118,12 @@ jobs:
           VITE_WEB_BASE_URL: ${{ vars.VITE_WEB_BASE_URL }}
           API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Updater signing — required for tauri-plugin-updater. The private
+          # key is generated locally with `pnpm tauri signer generate` and
+          # uploaded as a repo secret; the matching public key is embedded in
+          # tauri.conf.json so installed apps can verify update bundles.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
@@ -125,4 +131,9 @@ jobs:
           releaseBody: 'Hindsight desktop build. Download the installer for your platform below.'
           releaseDraft: true
           prerelease: false
+          # Generates latest.json from the build artifacts and uploads it as a
+          # release asset. The updater endpoint in tauri.conf.json points at
+          # /releases/latest/download/latest.json — that URL only resolves
+          # once the draft is promoted to a published release.
+          includeUpdaterJson: true
           args: ${{ matrix.tauri-args }}

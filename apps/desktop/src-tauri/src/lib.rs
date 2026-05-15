@@ -152,10 +152,17 @@ pub fn run() {
         .or_else(|| option_env!("API_BASE_URL").map(String::from))
         .unwrap_or_else(|| "http://localhost:3001".to_string());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init());
+
+    // Updater is desktop-only; the crate isn't compiled on mobile targets.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_device_token,
             set_device_token,
