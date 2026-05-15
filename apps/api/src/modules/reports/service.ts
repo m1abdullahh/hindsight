@@ -11,6 +11,8 @@ export interface TimeTotalRow {
   projectId: string;
   projectName: string;
   totalActiveSeconds: number;
+  totalIdleSeconds: number;
+  activityPercent: number;
   hourlyRateCents: number | null;
   earnedCents: number | null;
 }
@@ -23,6 +25,11 @@ export interface TimeTotalsResult {
 const computeEarnedCents = (seconds: number, rateCents: number | null): number | null => {
   if (rateCents === null) return null;
   return Math.round((seconds / 3600) * rateCents);
+};
+
+const computeActivityPercent = (activeSeconds: number, idleSeconds: number): number => {
+  const totalSeconds = activeSeconds + idleSeconds;
+  return totalSeconds > 0 ? (activeSeconds / totalSeconds) * 100 : 0;
 };
 
 export const computeTimeTotals = async (
@@ -49,7 +56,7 @@ export const computeTimeTotals = async (
           }
         : {}),
     },
-    _sum: { totalActiveSeconds: true },
+    _sum: { totalActiveSeconds: true, totalIdleSeconds: true },
   });
 
   if (groups.length === 0) {
@@ -92,7 +99,8 @@ export const computeTimeTotals = async (
   const rows: TimeTotalRow[] = groups.map((g) => {
     const u = userById.get(g.userId);
     const p = projectById.get(g.projectId);
-    const seconds = g._sum.totalActiveSeconds ?? 0;
+    const activeSeconds = g._sum.totalActiveSeconds ?? 0;
+    const idleSeconds = g._sum.totalIdleSeconds ?? 0;
     const rate = rateByPair.get(`${g.projectId}::${g.userId}`) ?? null;
     return {
       userId: g.userId,
@@ -100,9 +108,11 @@ export const computeTimeTotals = async (
       userEmail: u?.email ?? '',
       projectId: g.projectId,
       projectName: p?.name ?? '(unknown project)',
-      totalActiveSeconds: seconds,
+      totalActiveSeconds: activeSeconds,
+      totalIdleSeconds: idleSeconds,
+      activityPercent: computeActivityPercent(activeSeconds, idleSeconds),
       hourlyRateCents: rate,
-      earnedCents: computeEarnedCents(seconds, rate),
+      earnedCents: computeEarnedCents(activeSeconds, rate),
     };
   });
 

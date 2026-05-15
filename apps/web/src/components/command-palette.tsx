@@ -2,15 +2,7 @@ import type { MembershipDto, ProjectDto, UserDto } from '@hindsight/shared/dto';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { Command } from 'cmdk';
-import {
-  BarChart3,
-  Camera,
-  Clock,
-  FolderKanban,
-  LayoutDashboard,
-  Settings,
-  Users,
-} from 'lucide-react';
+import { Camera, Clock, FolderKanban, LayoutDashboard, Settings, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { apiGet } from '@/lib/api';
@@ -73,11 +65,11 @@ const buildPages = (orgId: string | null): PageEntry[] => {
         params: { orgId },
       },
       {
-        key: 'timesheet',
-        label: 'Timesheet',
-        keywords: ['timesheet', 'hours', 'time'],
+        key: 'report',
+        label: 'Report',
+        keywords: ['report', 'timesheet', 'hours', 'time', 'analytics'],
         icon: <Clock className="h-3.5 w-3.5" />,
-        to: '/orgs/$orgId/timesheet',
+        to: '/orgs/$orgId/report',
         params: { orgId },
       },
       {
@@ -94,14 +86,6 @@ const buildPages = (orgId: string | null): PageEntry[] => {
         keywords: ['members', 'team', 'people', 'users'],
         icon: <Users className="h-3.5 w-3.5" />,
         to: '/orgs/$orgId/members',
-        params: { orgId },
-      },
-      {
-        key: 'reports',
-        label: 'Reports',
-        keywords: ['reports', 'analytics', 'time totals'],
-        icon: <BarChart3 className="h-3.5 w-3.5" />,
-        to: '/orgs/$orgId/reports',
         params: { orgId },
       },
     );
@@ -137,8 +121,7 @@ export function CommandPalette({ open, onOpenChange, orgId }: CommandPaletteProp
   const enabled = open && !!orgId && debounced.length > 0;
   const { data, isFetching } = useQuery({
     queryKey: orgId ? queryKeys.search(orgId, debounced) : ['search', 'idle'],
-    queryFn: () =>
-      apiGet<SearchResponse>(`/orgs/${orgId!}/search`, { q: debounced, limit: 8 }),
+    queryFn: () => apiGet<SearchResponse>(`/orgs/${orgId!}/search`, { q: debounced, limit: 8 }),
     enabled,
     staleTime: 30_000,
   });
@@ -288,52 +271,6 @@ export function CommandPalette({ open, onOpenChange, orgId }: CommandPaletteProp
                   {p.description && (
                     <span className="truncate text-[11px] text-ink4">{p.description}</span>
                   )}
-                </Item>
-              ))}
-            </Command.Group>
-          )}
-
-          {(members.length > 0 || projects.length > 0) && orgId && (
-            <Command.Group
-              heading="Reports"
-              className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.06em] [&_[cmdk-group-heading]]:text-ink4"
-            >
-              {members.map((m) => (
-                <Item
-                  key={`report-member:${m.user.id}`}
-                  value={`report-member:${m.user.id}`}
-                  icon={<BarChart3 className="h-3.5 w-3.5" />}
-                  onSelect={() =>
-                    go(() => {
-                      void navigate({
-                        to: '/orgs/$orgId/reports',
-                        params: { orgId },
-                        search: { userId: m.user.id },
-                      });
-                    })
-                  }
-                >
-                  <span className="flex-1 truncate">Report for {m.user.name}</span>
-                  <span className="text-[10.5px] text-ink4">Open</span>
-                </Item>
-              ))}
-              {projects.map((p) => (
-                <Item
-                  key={`report-project:${p.id}`}
-                  value={`report-project:${p.id}`}
-                  icon={<BarChart3 className="h-3.5 w-3.5" />}
-                  onSelect={() =>
-                    go(() => {
-                      void navigate({
-                        to: '/orgs/$orgId/reports',
-                        params: { orgId },
-                        search: { projectId: p.id },
-                      });
-                    })
-                  }
-                >
-                  <span className="flex-1 truncate">Report for {p.name}</span>
-                  <span className="text-[10.5px] text-ink4">Open</span>
                 </Item>
               ))}
             </Command.Group>

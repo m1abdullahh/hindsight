@@ -2,12 +2,13 @@ import type {
   PresenceEntryDto,
   ProjectAssignmentDto,
   ProjectDto,
+  TimeEntryDto,
   UserDto,
 } from '@hindsight/shared/dto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { ScreenshotDialog } from '@/components/screenshot-dialog';
 import { AvatarLive } from '@/components/ui/avatar-live';
@@ -39,6 +40,16 @@ interface TimeTotalRow {
 }
 interface TimeTotalsResponse {
   rows: TimeTotalRow[];
+}
+interface TimeTotalsByDayRow {
+  index: number;
+  totalActiveSeconds: number;
+}
+interface TimeTotalsByDayResponse {
+  days: TimeTotalsByDayRow[];
+}
+interface TimeEntriesResponse {
+  entries: TimeEntryDto[];
 }
 interface ScreenshotListItem {
   screenshot: {
@@ -126,6 +137,45 @@ function ProjectOverviewPage() {
       }),
   });
 
+  // Last-7-days time-entries scoped to this project — drives the real
+  // Activity-avg KPI (active vs idle seconds across the week).
+  const weekEntriesQuery = useQuery({
+    queryKey: [
+      'orgs',
+      params.orgId,
+      'time-entries',
+      { projectId: params.projectId, from: weekFrom, limit: 100 },
+    ] as const,
+    queryFn: () =>
+      apiGet<TimeEntriesResponse>(`/orgs/${params.orgId}/time-entries`, {
+        projectId: params.projectId,
+        from: weekFrom,
+        limit: 100,
+      }),
+  });
+
+  // 14-day rolling window driving the KPI sparklines for this project.
+  const sparkRange = useMemo(() => {
+    const to = new Date();
+    to.setHours(0, 0, 0, 0);
+    to.setDate(to.getDate() + 1);
+    const from = new Date(to);
+    from.setDate(to.getDate() - 14);
+    return {
+      projectId: params.projectId,
+      from: from.toISOString(),
+      to: to.toISOString(),
+    };
+  }, [params.projectId]);
+  const sparkByDayQuery = useQuery({
+    queryKey: ['orgs', params.orgId, 'reports', 'time-totals-by-day', sparkRange] as const,
+    queryFn: () =>
+      apiGet<TimeTotalsByDayResponse>(
+        `/orgs/${params.orgId}/reports/time-totals-by-day`,
+        sparkRange,
+      ),
+  });
+
   const presenceQuery = useQuery({
     queryKey: queryKeys.presence(params.orgId),
     queryFn: () => apiGet<PresenceResponse>(`/orgs/${params.orgId}/presence`),
@@ -167,9 +217,25 @@ function ProjectOverviewPage() {
   // a "default" until the schema gains a per-project default rate.
   const defaultRateCents = mostCommonRate(assignments);
 
-  // Activity-avg KPI is a stable seeded placeholder until we surface a real
-  // active-vs-idle ratio from time entries.
-  const activityAvgPercent = seededPercent(p.id, 75, 92);
+  // Real active-vs-idle ratio across this project's last 7 days. Returns
+  // null when there's nothing tracked yet so the tile shows "—" instead of
+  // 0% (which would be misleading vs. "no data").
+  const weekEntries = weekEntriesQuery.data?.entries ?? [];
+  const activityAvgPercent: number | null = (() => {
+    let active = 0;
+    let idle = 0;
+    for (const e of weekEntries) {
+      active += e.totalActiveSeconds;
+      idle += e.totalIdleSeconds;
+    }
+    if (active + idle === 0) return null;
+    return Math.round((active / (active + idle)) * 100);
+  })();
+
+  // Real per-day shape for the KPI sparklines from this project's 14-day
+  // byDay rollup. Activity avg has no per-day idle data here, so it stays
+  // empty (sparkline hides gracefully).
+  const projectSpark = (sparkByDayQuery.data?.days ?? []).map((d) => d.totalActiveSeconds);
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
@@ -180,22 +246,22 @@ function ProjectOverviewPage() {
             label="Today"
             value={formatHours(todaySeconds)}
             sub={`${activeMembersToday} member${activeMembersToday === 1 ? '' : 's'}`}
-            spark={mockSpark(2)}
+            spark={projectSpark}
             loading={todayQuery.isLoading}
           />
           <KpiTile
             label="This week"
             value={formatHours(weekSeconds)}
             sub={weekAnyEarned ? `${formatMoney(weekEarned)} billable` : 'no rates set'}
-            spark={mockSpark(5)}
+            spark={projectSpark}
             loading={weekQuery.isLoading}
           />
           <KpiTile
             label="Activity avg"
-            value={`${activityAvgPercent}%`}
-            sub="last 7d"
-            spark={mockSpark(8)}
-            loading={weekQuery.isLoading}
+            value={activityAvgPercent === null ? '—' : `${activityAvgPercent}%`}
+            sub={activityAvgPercent === null ? 'no entries yet' : 'last 7d'}
+            spark={[]}
+            loading={weekEntriesQuery.isLoading}
           />
         </div>
 
@@ -387,13 +453,15 @@ function KpiTile({
         ) : (
           <div className="font-mono text-[22px] font-medium tracking-tight">{value}</div>
         )}
-        <Sparkline
-          data={spark}
-          color="hsl(var(--accent))"
-          fill="hsl(var(--accent-soft))"
-          width={56}
-          height={24}
-        />
+        {spark.length > 0 && (
+          <Sparkline
+            data={spark}
+            color="hsl(var(--accent))"
+            fill="hsl(var(--accent-soft))"
+            width={56}
+            height={24}
+          />
+        )}
       </div>
       <div className="mt-1 text-[11.5px] text-ink3">{sub}</div>
     </div>
@@ -407,11 +475,6 @@ function SettingRow({ label, value }: { label: string; value: React.ReactNode })
       <span className="font-medium">{value}</span>
     </div>
   );
-}
-
-function mockSpark(offset: number): number[] {
-  const base = [3, 4, 5, 4, 6, 5, 7, 6, 8, 7, 9, 10];
-  return base.map((v, i) => v + ((i + offset) % 3));
 }
 
 function mostCommonRate(assignments: AssignmentRow[]): number | null {
@@ -429,11 +492,4 @@ function mostCommonRate(assignments: AssignmentRow[]): number | null {
     }
   }
   return top;
-}
-
-function seededPercent(id: string, min: number, max: number): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  const r = Math.abs(Math.sin(h + 1));
-  return Math.round(min + r * (max - min));
 }

@@ -42,6 +42,7 @@ const seedClosedEntry = async (
   deviceId: string,
   startedMinutesAgo: number,
   durationSeconds: number,
+  idleSeconds = 0,
 ) => {
   const startedAt = new Date(Date.now() - startedMinutesAgo * 60 * 1000);
   const endedAt = new Date(startedAt.getTime() + durationSeconds * 1000);
@@ -54,6 +55,7 @@ const seedClosedEntry = async (
       startedAt,
       endedAt,
       totalActiveSeconds: durationSeconds,
+      totalIdleSeconds: idleSeconds,
     },
   });
 };
@@ -116,6 +118,8 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('reports/time-to
       userId: string;
       projectName: string;
       totalActiveSeconds: number;
+      totalIdleSeconds: number;
+      activityPercent: number;
       hourlyRateCents: number | null;
       earnedCents: number | null;
     }[];
@@ -124,11 +128,15 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('reports/time-to
     // Sorted by project then user — Alpha rows first (Member, then owner alphabetically).
     const alphaMember = rows.find((r) => r.projectName === 'Alpha' && r.userId === memberUser.id);
     expect(alphaMember?.totalActiveSeconds).toBe(7200);
+    expect(alphaMember?.totalIdleSeconds).toBe(0);
+    expect(alphaMember?.activityPercent).toBe(100);
     expect(alphaMember?.hourlyRateCents).toBe(3000);
     expect(alphaMember?.earnedCents).toBe(6000); // 2h × $30 = $60.00
 
     const alphaOwner = rows.find((r) => r.projectName === 'Alpha' && r.userId === owner.userId);
     expect(alphaOwner?.totalActiveSeconds).toBe(3600);
+    expect(alphaOwner?.totalIdleSeconds).toBe(0);
+    expect(alphaOwner?.activityPercent).toBe(100);
     expect(alphaOwner?.hourlyRateCents).toBeNull();
     expect(alphaOwner?.earnedCents).toBeNull();
   });
@@ -188,5 +196,29 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('reports/time-to
     expect(res.status).toBe(200);
     expect(res.body.rows).toHaveLength(1);
     expect(res.body.rows[0].totalActiveSeconds).toBe(600);
+  });
+
+  it('returns real activity percent from active and idle totals', async () => {
+    const owner = await signup('owner@example.com', 'Acme');
+    const ownerDev = await registerDevice(owner.token);
+    const app = makeTestApp();
+
+    const p = await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/projects`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ name: 'Alpha' });
+
+    await seedClosedEntry(owner.userId, p.body.id, ownerDev.deviceId, 120, 1800, 1800);
+    await seedClosedEntry(owner.userId, p.body.id, ownerDev.deviceId, 60, 900, 300);
+
+    const res = await request(app)
+      .get(`/api/v1/orgs/${owner.orgId}/reports/time-totals`)
+      .set('Authorization', `Bearer ${owner.token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.rows).toHaveLength(1);
+    expect(res.body.rows[0].totalActiveSeconds).toBe(2700);
+    expect(res.body.rows[0].totalIdleSeconds).toBe(2100);
+    expect(res.body.rows[0].activityPercent).toBeCloseTo(56.25, 5);
   });
 });
