@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 // Re-check this often once the app has booted. The check itself is a cheap
 // HEAD-then-GET against latest.json so we don't worry about hammering GitHub.
-const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const POLL_INTERVAL_MS = 1 * 60 * 60 * 1000;
 
 // Delay the first check after boot so we don't compete with login + initial
 // /auth/me + capture-permission flows for the network and the user's attention.

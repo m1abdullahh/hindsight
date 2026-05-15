@@ -47,7 +47,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzMDY2MjM2NjE3RjY2ODYKUldTR1puOWhObUlHWXp6YkVLMWRiZzVBTXJnOXlTUlFDRkVuN2NBN0ZuNzZDN0RSL0ZKaWJqdWoK",
       "endpoints": [
-        "https://github.com/m1abdullahh/screenshot-monitor-tool/releases/latest/download/latest.json"
+        "https://github.com/m1abdullahh/hindsight/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
