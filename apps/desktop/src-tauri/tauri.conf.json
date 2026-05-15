@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hindsight",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "app.hindsight.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev:vite",
@@ -23,11 +23,12 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3001 https://*.hindsight.app https://*.onrender.com https://*.r2.cloudflarestorage.com"
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3001 https://*.hindsight.app https://*.onrender.com https://*.r2.cloudflarestorage.com https://github.com https://objects.githubusercontent.com https://*.githubusercontent.com"
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["msi", "nsis", "app", "dmg", "deb", "rpm", "appimage"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico", "icons/icon.icns"],
     "windows": {
@@ -40,6 +41,17 @@
     },
     "macOS": {
       "minimumSystemVersion": "10.15"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzMDY2MjM2NjE3RjY2ODYKUldTR1puOWhObUlHWXp6YkVLMWRiZzVBTXJnOXlTUlFDRkVuN2NBN0ZuNzZDN0RSL0ZKaWJqdWoK",
+      "endpoints": [
+        "https://github.com/m1abdullahh/screenshot-monitor-tool/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

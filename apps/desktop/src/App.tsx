@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 
+import { UpdaterDialog } from './components/UpdaterDialog';
 import { Toaster } from './components/ui/toaster';
 import { LoginScreen } from './screens/LoginScreen';
 import { PermissionGateScreen } from './screens/PermissionGateScreen';
@@ -10,6 +11,7 @@ import { TrackerScreen } from './screens/TrackerScreen';
 import { ApiError, apiGet, clearTokenCache } from './lib/api';
 import { session } from './lib/session-store';
 import { usePresenceHeartbeat } from './lib/use-presence-heartbeat';
+import { useUpdater } from './lib/use-updater';
 
 export function App() {
   const stage = session((s) => s.stage);
@@ -22,6 +24,7 @@ export function App() {
   const [permissionsOk, setPermissionsOk] = useState(false);
 
   usePresenceHeartbeat();
+  const updater = useUpdater();
 
   // On boot, if a device token exists in Credential Manager, validate it
   // via /auth/me and skip straight to picking.
@@ -96,6 +99,7 @@ export function App() {
         )}
       </div>
       <Toaster />
+      <UpdaterDialog updater={updater} />
     </div>
   );
 }
