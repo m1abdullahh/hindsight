@@ -1,6 +1,5 @@
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
-  BarChart3,
   Building2,
   Camera,
   ChevronDown,
@@ -75,7 +74,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-dvh bg-background">
       {/* Sidebar — 220px, Option A spec */}
-      <aside className="hidden w-[220px] flex-col border-r border-border bg-background px-2.5 py-3.5 md:flex">
+      <aside
+        data-app-shell-chrome="sidebar"
+        className="hidden w-[220px] flex-col border-r border-border bg-background px-2.5 py-3.5 md:flex"
+      >
         <div className="flex items-center gap-2 px-2 pb-4 text-sm font-semibold tracking-tight">
           <div className="grid h-6 w-6 place-items-center rounded-md bg-foreground text-[12px] font-bold text-background">
             H
@@ -129,12 +131,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                 Screenshots
               </NavLink>
               <NavLink
-                to="/orgs/$orgId/timesheet"
+                to="/orgs/$orgId/report"
                 params={{ orgId: currentOrgId }}
                 icon={<Clock className="h-[15px] w-[15px]" />}
-                active={path.startsWith(`/orgs/${currentOrgId}/timesheet`)}
+                active={path.startsWith(`/orgs/${currentOrgId}/report`)}
               >
-                Timesheet
+                Report
               </NavLink>
               <NavLink
                 to="/orgs/$orgId/projects"
@@ -154,14 +156,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 active={path.startsWith(`/orgs/${currentOrgId}/members`)}
               >
                 Members
-              </NavLink>
-              <NavLink
-                to="/orgs/$orgId/reports"
-                params={{ orgId: currentOrgId }}
-                icon={<BarChart3 className="h-[15px] w-[15px]" />}
-                active={path.startsWith(`/orgs/${currentOrgId}/reports`)}
-              >
-                Reports
               </NavLink>
             </>
           )}
@@ -240,7 +234,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="flex h-12 items-center gap-3.5 border-b border-border bg-card px-5">
+        <header
+          data-app-shell-chrome="topbar"
+          className="flex h-12 items-center gap-3.5 border-b border-border bg-card px-5"
+        >
           <div className="flex items-center gap-1 text-[13px] text-ink3">
             {currentOrg ? (
               <span>
@@ -306,11 +303,10 @@ function NavLink({ to, params, icon, active, children }: NavLinkProps) {
 
 function titleForPath(path: string): string {
   if (path.includes('/screenshots')) return 'Screenshots';
-  if (path.includes('/timesheet')) return 'Timesheet';
+  if (path.includes('/report')) return 'Report';
   if (path.includes('/projects/')) return 'Projects';
   if (path.endsWith('/projects')) return 'Projects';
   if (path.includes('/members')) return 'Members';
-  if (path.includes('/reports')) return 'Reports';
   if (path.includes('/settings')) return 'Settings';
   return 'Overview';
 }

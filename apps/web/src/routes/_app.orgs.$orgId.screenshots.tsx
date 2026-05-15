@@ -609,20 +609,15 @@ function isIdle(it: ScreenshotListItem): boolean {
   );
 }
 
-// Activity % shown on each thumbnail. We don't have a true active-vs-idle
-// ratio per screenshot, so we derive a stable percent seeded by the
-// screenshot id — idle frames bias toward the low end so the bottom-right
-// number agrees with the IDLE badge.
+// Activity % shown on each thumbnail. Derived from real input-event counts
+// over the screenshot's capture window. We saturate at ~1000 events per
+// window (a rough "fully active" threshold for the default 10-min interval),
+// so heavy typing/clicking maxes out and quiet moments read low.
+const ACTIVITY_SATURATION_EVENTS = 1000;
 function activityPercent(it: ScreenshotListItem): number {
-  if (isIdle(it)) return seededPercent(it.screenshot.id, 5, 18);
-  return seededPercent(it.screenshot.id, 60, 95);
-}
-
-function seededPercent(id: string, min: number, max: number): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  const r = Math.abs(Math.sin(h + 1));
-  return Math.round(min + r * (max - min));
+  const events = (it.screenshot.keyboardEventsCount ?? 0) + (it.screenshot.mouseEventsCount ?? 0);
+  if (events === 0) return 0;
+  return Math.min(100, (events / ACTIVITY_SATURATION_EVENTS) * 100);
 }
 
 function paletteFor(id: string): [string, string] {

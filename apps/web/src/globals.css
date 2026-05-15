@@ -82,3 +82,22 @@
     font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 }
+
+/*
+ * Print scope for the Report PDF export. We toggle `printing-report` on
+ * <body> just before calling window.print(), then strip it on afterprint. The
+ * rules hide the app shell (sidebar, top bar) and any element marked
+ * `print:hidden`, then collapse default page padding so the report fills the
+ * paper.
+ */
+@media print {
+  body.printing-report [data-app-shell-chrome] {
+    display: none !important;
+  }
+  body.printing-report main {
+    padding: 0 !important;
+  }
+  body.printing-report {
+    background: white !important;
+  }
+}

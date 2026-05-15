@@ -1116,10 +1116,6 @@ function ScreenshotPreview({
 
   const handleDelete = async (): Promise<void> => {
     if (deleting || !detail) return;
-    const ok = window.confirm(
-      'Permanently delete this screenshot?\n\nThis also subtracts its tracked interval from your total time.',
-    );
-    if (!ok) return;
     setDeleting(true);
     try {
       await apiDelete(`/screenshots/${id}`);

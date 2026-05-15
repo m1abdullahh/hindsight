@@ -124,7 +124,6 @@ function ProjectDetailLayout() {
   const overviewPath = `/orgs/${params.orgId}/projects/${params.projectId}`;
   const membersPath = `${overviewPath}/members`;
   const screenshotsPath = `${overviewPath}/screenshots`;
-  const reportsPath = `${overviewPath}/reports`;
   const weekSeconds = (weekQuery.data?.rows ?? []).reduce((s, r) => s + r.totalActiveSeconds, 0);
 
   return (
@@ -192,13 +191,6 @@ function ProjectDetailLayout() {
           className={tabClasses(path.startsWith(screenshotsPath))}
         >
           Screenshots
-        </Link>
-        <Link
-          to="/orgs/$orgId/projects/$projectId/reports"
-          params={params}
-          className={tabClasses(path.startsWith(reportsPath))}
-        >
-          Reports
         </Link>
       </div>
 

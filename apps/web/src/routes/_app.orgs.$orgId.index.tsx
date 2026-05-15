@@ -1,7 +1,13 @@
-import type { MembershipDto, PresenceEntryDto, ProjectDto, UserDto } from '@hindsight/shared/dto';
+import type {
+  MembershipDto,
+  PresenceEntryDto,
+  ProjectDto,
+  TimeEntryDto,
+  UserDto,
+} from '@hindsight/shared/dto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { ScreenshotDialog } from '@/components/screenshot-dialog';
 import { ActivityBar, type ActivitySegment } from '@/components/ui/activity-bar';
@@ -30,6 +36,17 @@ interface TimeTotalRow {
 }
 interface TimeTotalsResponse {
   rows: TimeTotalRow[];
+}
+interface TimeTotalsByDayRow {
+  index: number;
+  totalActiveSeconds: number;
+  segments: { projectId: string; projectName: string; totalActiveSeconds: number }[];
+}
+interface TimeTotalsByDayResponse {
+  days: TimeTotalsByDayRow[];
+}
+interface TimeEntriesResponse {
+  entries: TimeEntryDto[];
 }
 interface ScreenshotListItem {
   screenshot: {
@@ -101,6 +118,37 @@ function DashboardPage() {
     refetchInterval: 30_000,
   });
 
+  // 14-day window driving the KPI sparklines. Stable per mount (rolling window
+  // anchored at today) so the query key stays steady across renders.
+  const sparkRange = useMemo(() => {
+    const to = new Date();
+    to.setHours(0, 0, 0, 0);
+    to.setDate(to.getDate() + 1);
+    const from = new Date(to);
+    from.setDate(to.getDate() - 14);
+    return { from: from.toISOString(), to: to.toISOString() };
+  }, []);
+  const sparkByDayQuery = useQuery({
+    queryKey: ['orgs', params.orgId, 'reports', 'time-totals-by-day', sparkRange] as const,
+    queryFn: () =>
+      apiGet<TimeTotalsByDayResponse>(
+        `/orgs/${params.orgId}/reports/time-totals-by-day`,
+        sparkRange,
+      ),
+  });
+
+  // Today's time-entries — drives the per-30min Team-timeline buckets so the
+  // ribbon reflects real coverage rather than a seeded random pattern.
+  const todayEntriesQuery = useQuery({
+    queryKey: ['orgs', params.orgId, 'time-entries', { from: todayFrom, limit: 100 }] as const,
+    queryFn: () =>
+      apiGet<TimeEntriesResponse>(`/orgs/${params.orgId}/time-entries`, {
+        from: todayFrom,
+        limit: 100,
+      }),
+    refetchInterval: 30_000,
+  });
+
   const recentScreenshotsQuery = useQuery({
     queryKey: queryKeys.screenshots(params.orgId, {}),
     enabled: isAdmin,
@@ -163,6 +211,13 @@ function DashboardPage() {
   const activeMemberCount = todayByUser.size;
   const lastCaptureAt = screenshotItems[0]?.screenshot.capturedAt ?? null;
 
+  // Sparklines from the rolling 14-day per-day report. Tiles with no derivable
+  // signal (Captures, Billable shape) get an empty array — the sparkline
+  // gracefully hides itself in that case.
+  const sparkDays = sparkByDayQuery.data?.days ?? [];
+  const trackedSpark = sparkDays.map((d) => d.totalActiveSeconds);
+  const activeProjectsSpark = sparkDays.map((d) => d.segments.length);
+
   // Recent screenshots grouped by user (top 3 active users today).
   const screenshotsByUser = new Map<string, ScreenshotListItem[]>();
   for (const item of screenshotItems) {
@@ -208,28 +263,28 @@ function DashboardPage() {
           label="Tracked today"
           value={formatHours(trackedSeconds)}
           sub={`across ${activeMemberCount} member${activeMemberCount === 1 ? '' : 's'}`}
-          spark={mockSpark(11)}
+          spark={trackedSpark}
           loading={todayTotalsQuery.isLoading}
         />
         <StatCard
           label="Active projects"
           value={projectsQuery.data?.projects.filter((p) => !p.archivedAt).length}
           sub="not archived"
-          spark={mockSpark(8)}
+          spark={activeProjectsSpark}
           loading={projectsQuery.isLoading}
         />
         <StatCard
           label="Captures"
           value={captureCount}
           sub={isAdmin ? 'recent uploads' : 'visible to you'}
-          spark={mockSpark(9)}
+          spark={[]}
           loading={recentScreenshotsQuery.isLoading}
         />
         <StatCard
           label="Billable today"
           value={anyEarned ? formatMoney(earnedCents) : '$0.00'}
           sub={anyEarned ? 'at current rates' : 'no rates set'}
-          spark={mockSpark(10)}
+          spark={anyEarned ? trackedSpark : []}
           loading={todayTotalsQuery.isLoading}
         />
       </div>
@@ -256,7 +311,7 @@ function DashboardPage() {
             </span>
           </div>
         </div>
-        {membersQuery.isLoading || todayTotalsQuery.isLoading ? (
+        {membersQuery.isLoading || todayTotalsQuery.isLoading || todayEntriesQuery.isLoading ? (
           <div className="space-y-2 p-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-10 w-full" />
@@ -268,7 +323,10 @@ function DashboardPage() {
           sortedMembers.map((m, i) => {
             const seconds = todayByUser.get(m.user.id) ?? 0;
             const presence = presenceByUser.get(m.user.id) ?? 'offline';
-            const segments = mockActivitySegments(m.user.id, seconds);
+            const segments = activitySegmentsFromEntries(
+              m.user.id,
+              todayEntriesQuery.data?.entries ?? [],
+            );
             const presenceLabel =
               presence === 'active' ? '● active' : presence === 'idle' ? '● idle' : 'offline';
             const presenceClass =
@@ -396,42 +454,40 @@ function DashboardPage() {
 
 // ── helpers ────────────────────────────────────────────────────────────
 
-// Until we have a real per-hour activity endpoint, render visually-plausible
-// segments seeded by userId so the layout is honest about what's there:
-// users with tracking today get an active pattern; everyone else stays grey.
-function mockActivitySegments(userId: string, secondsToday: number): ActivitySegment[] {
-  const segments: ActivitySegment[] = [];
-  // 17 segments covering 07:00–24:00 of the workday.
-  const total = 17;
-  if (secondsToday === 0) {
-    for (let i = 0; i < total; i++) segments.push(0);
-    return segments;
-  }
-  // Roughly translate seconds into a number of "active hours" worth of bars.
-  const activeBuckets = Math.min(total, Math.ceil(secondsToday / 1800)); // ~30min per bar
-  let seed = 0;
-  for (let i = 0; i < userId.length; i++) seed = (seed * 31 + userId.charCodeAt(i)) | 0;
-  const rand = (n: number) => {
-    const x = Math.sin((seed + 1) * (n + 7.13)) * 10000;
-    return x - Math.floor(x);
-  };
-  for (let i = 0; i < total; i++) {
-    if (i >= activeBuckets) {
-      segments.push(0);
-      continue;
-    }
-    const r = rand(i);
-    if (r < 0.08) segments.push('idle');
-    else if (r < 0.35) segments.push(1);
-    else if (r < 0.65) segments.push(2);
-    else segments.push(3);
-  }
-  return segments;
-}
+// 17 half-hour buckets from 07:00 to 23:30 of `today`. For each bucket we
+// sum the overlap-seconds of all of this user's time-entries, weighted by
+// each entry's active-vs-idle ratio. Buckets convert to ActivitySegment
+// intensities so the ribbon traces real coverage instead of a seed.
+const BUCKET_COUNT = 17;
+const BUCKET_MS = 30 * 60 * 1000;
+function activitySegmentsFromEntries(userId: string, entries: TimeEntryDto[]): ActivitySegment[] {
+  const start = new Date();
+  start.setHours(7, 0, 0, 0);
+  const startMs = start.getTime();
+  const now = Date.now();
 
-// Stable mock sparkline data — same shape per index so the dashboard doesn't
-// flicker on re-render. Replace with real per-hour aggregates once available.
-function mockSpark(offset: number): number[] {
-  const base = [3, 4, 5, 4, 6, 5, 7, 6, 8, 7, 9, 10];
-  return base.map((v, i) => v + ((i + offset) % 3));
+  const scores = new Array<number>(BUCKET_COUNT).fill(0);
+  for (const e of entries) {
+    if (e.userId !== userId) continue;
+    const entryStart = new Date(e.startedAt).getTime();
+    const entryEnd = e.endedAt ? new Date(e.endedAt).getTime() : now;
+    if (entryEnd <= startMs) continue;
+    const denom = e.totalActiveSeconds + e.totalIdleSeconds;
+    const activeRatio = denom > 0 ? e.totalActiveSeconds / denom : 1;
+    for (let i = 0; i < BUCKET_COUNT; i++) {
+      const bStart = startMs + i * BUCKET_MS;
+      const bEnd = bStart + BUCKET_MS;
+      const overlapMs = Math.max(0, Math.min(entryEnd, bEnd) - Math.max(entryStart, bStart));
+      if (overlapMs > 0) scores[i]! += (overlapMs / 1000) * activeRatio;
+    }
+  }
+
+  return scores.map<ActivitySegment>((score) => {
+    const ratio = score / 1800; // fraction of the bucket filled with active time
+    if (ratio === 0) return 0;
+    if (ratio <= 0.2) return 'idle';
+    if (ratio <= 0.5) return 1;
+    if (ratio <= 0.8) return 2;
+    return 3;
+  });
 }
