@@ -202,6 +202,40 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('auth extras', (
     expect(oldLogin.status).toBe(401);
   });
 
+  it('change-password preserves device tokens (deliberate per docs)', async () => {
+    const owner = await signup('owner@example.com', 'Acme');
+    const device = await prisma.device.create({
+      data: {
+        id: 'd-1',
+        userId: owner.userId,
+        deviceName: 'Mac',
+        os: 'macos',
+        appVersion: '1.0.0',
+      },
+    });
+    const deviceToken = (
+      await mintToken({ userId: owner.userId, kind: 'device', deviceId: device.id })
+    ).plaintext;
+
+    const app = makeTestApp();
+    const ok = await request(app)
+      .post('/api/v1/auth/password/change')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({
+        currentPassword: 'correct horse battery staple',
+        newPassword: 'a-completely-new-pass',
+      });
+    expect(ok.status).toBe(204);
+
+    // Device token still works after password change — desktop sessions
+    // are intentionally not killed when a user rotates their web password.
+    const heartbeat = await request(app)
+      .post('/api/v1/devices/heartbeat')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({ appVersion: '1.0.0' });
+    expect(heartbeat.status).toBe(200);
+  });
+
   it('change-password rejects wrong current password', async () => {
     const owner = await signup('owner@example.com', 'Acme');
     const app = makeTestApp();

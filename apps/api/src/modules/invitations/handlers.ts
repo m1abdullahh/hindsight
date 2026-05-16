@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 
+import { verifyAndSlide } from '../../auth/tokens.js';
 import { AppError } from '../../lib/errors.js';
+import { prisma } from '../../lib/prisma.js';
 
 import * as service from './service.js';
 import type { AcceptInviteInput, CreateInviteInput } from './schemas.js';
@@ -68,7 +70,31 @@ export const revokeInviteHandler = async (req: Request, res: Response): Promise<
   res.status(204).end();
 };
 
+// Resolve the bearer token if one is present, but don't reject when it's
+// missing — accept-invite is the one route that must work both anonymously
+// (new user creating an account) and authenticated (existing user with a
+// matching email). When a *different* user is signed in, the service throws
+// 409 so the UI can prompt them to log out first.
+const optionalCallerEmail = async (req: Request): Promise<string | undefined> => {
+  const header = req.get('authorization');
+  if (!header?.startsWith('Bearer ')) return undefined;
+  try {
+    const { token } = await verifyAndSlide(header.slice(7));
+    const user = await prisma.user.findUnique({ where: { id: token.userId } });
+    if (!user || user.deletedAt) return undefined;
+    return user.email;
+  } catch {
+    // Invalid/expired tokens just behave as "anonymous" here; we don't
+    // surface a 401 to a user trying to accept an invite link.
+    return undefined;
+  }
+};
+
 export const acceptInviteHandler = async (req: Request, res: Response): Promise<void> => {
-  const result = await service.acceptInvite(req.body as AcceptInviteInput, callerCtx(req));
+  const authenticatedUserEmail = await optionalCallerEmail(req);
+  const result = await service.acceptInvite(req.body as AcceptInviteInput, {
+    ...callerCtx(req),
+    ...(authenticatedUserEmail ? { authenticatedUserEmail } : {}),
+  });
   res.status(201).json(result);
 };

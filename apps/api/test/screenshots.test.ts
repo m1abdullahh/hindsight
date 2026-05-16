@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { mintToken } from '../src/auth/tokens.js';
+import { ulid } from '../src/lib/id.js';
 import { prisma } from '../src/lib/prisma.js';
 
 import { makeTestApp } from './helpers/build-app.js';
@@ -141,6 +143,73 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('screenshots', (
       });
     expect(confirm.status).toBe(200);
     expect(confirm.body.status).toBe('uploaded');
+  });
+
+  it('confirm uses HEAD-reported size, ignoring client-supplied sizeBytes', async () => {
+    const fx = await setupOrg();
+    const app = makeTestApp();
+    const presigned = await request(app)
+      .post('/api/v1/screenshots/presign')
+      .set('Authorization', `Bearer ${fx.deviceToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({
+        timeEntryId: fx.timeEntryId,
+        capturedAt: new Date().toISOString(),
+        monitorIndex: 0,
+        contentType: 'image/jpeg',
+      });
+    r2Stub.put(r2Stub.putUrls[0]!.key, dummyJpegBytes(), 'image/jpeg');
+    const confirm = await request(app)
+      .post(`/api/v1/screenshots/${presigned.body.screenshotId}/confirm`)
+      .set('Authorization', `Bearer ${fx.deviceToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({
+        width: 1,
+        height: 1,
+        keyboardEventsCount: 0,
+        mouseEventsCount: 0,
+        // Client claims the upload was 1 byte; R2 will report the actual 16.
+        sizeBytes: 1,
+      });
+    expect(confirm.status).toBe(200);
+    // The persisted row should reflect what R2 stored, not the lie.
+    expect(confirm.body.sizeBytes).toBe(16);
+  });
+
+  it('confirm rejects content-type mismatch and deletes the uploaded object', async () => {
+    const fx = await setupOrg();
+    const app = makeTestApp();
+    const presigned = await request(app)
+      .post('/api/v1/screenshots/presign')
+      .set('Authorization', `Bearer ${fx.deviceToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({
+        timeEntryId: fx.timeEntryId,
+        capturedAt: new Date().toISOString(),
+        monitorIndex: 0,
+        contentType: 'image/jpeg',
+      });
+    const key = r2Stub.putUrls[0]!.key;
+    // Upload bytes claiming a different MIME than the presign promised.
+    r2Stub.put(key, Buffer.from('not really an image'), 'application/octet-stream');
+
+    const confirm = await request(app)
+      .post(`/api/v1/screenshots/${presigned.body.screenshotId}/confirm`)
+      .set('Authorization', `Bearer ${fx.deviceToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({
+        width: 1,
+        height: 1,
+        keyboardEventsCount: 0,
+        mouseEventsCount: 0,
+        sizeBytes: 19,
+      });
+    expect(confirm.status).toBe(415);
+    expect(r2Stub.objects.has(key)).toBe(false);
+    const row = await prisma.screenshot.findUniqueOrThrow({
+      where: { id: presigned.body.screenshotId },
+    });
+    expect(row.status).toBe('failed');
   });
 
   it('idempotent presign returns the same screenshotId + putUrl', async () => {
@@ -341,5 +410,106 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('screenshots', (
       .get(`/api/v1/screenshots/${presigned.body.screenshotId}`)
       .set('Authorization', `Bearer ${b.webToken}`);
     expect(get.status).toBe(403);
+  });
+
+  // Helper: drop a member + a member-owned TimeEntry + a Screenshot row into
+  // the org owned by `ownerFx`. Bypasses the full presign/upload flow because
+  // the delete-grace check is the only contract under test here.
+  const seedMemberScreenshot = async (
+    ownerFx: OrgFx,
+    capturedAt: Date,
+  ): Promise<{ memberWebToken: string; screenshotId: string }> => {
+    const memberEmail = `member-${randomUUID()}@example.com`;
+    const memberUser = await prisma.user.create({
+      data: {
+        id: `u-${memberEmail}`,
+        email: memberEmail,
+        name: 'M',
+        passwordHash: 'placeholder',
+      },
+    });
+    await prisma.membership.create({
+      data: {
+        id: `m-${memberEmail}`,
+        orgId: ownerFx.orgId,
+        userId: memberUser.id,
+        role: 'member',
+      },
+    });
+    const minted = await mintToken({ userId: memberUser.id, kind: 'web' });
+    const memberDevice = await prisma.device.create({
+      data: {
+        id: `d-${memberEmail}`,
+        userId: memberUser.id,
+        deviceName: 'member-dev',
+        os: 'macos',
+        appVersion: '1.0.0',
+      },
+    });
+    const memberEntry = await prisma.timeEntry.create({
+      data: {
+        id: ulid(),
+        userId: memberUser.id,
+        deviceId: memberDevice.id,
+        projectId: ownerFx.projectId,
+        startedAt: new Date(capturedAt.getTime() - 60_000),
+        totalActiveSeconds: 60,
+      },
+    });
+    const screenshot = await prisma.screenshot.create({
+      data: {
+        id: ulid(),
+        timeEntryId: memberEntry.id,
+        capturedAt,
+        s3Key: `test/${randomUUID()}.jpg`,
+        monitorIndex: 0,
+        status: 'uploaded',
+        width: 1,
+        height: 1,
+        sizeBytes: 16,
+      },
+    });
+    return { memberWebToken: minted.plaintext, screenshotId: screenshot.id };
+  };
+
+  it('member can delete own screenshot within the 5-minute grace window', async () => {
+    const owner = await setupOrg();
+    const { memberWebToken, screenshotId } = await seedMemberScreenshot(owner, new Date());
+    const app = makeTestApp();
+
+    const del = await request(app)
+      .delete(`/api/v1/screenshots/${screenshotId}`)
+      .set('Authorization', `Bearer ${memberWebToken}`);
+    expect(del.status).toBe(204);
+
+    const after = await prisma.screenshot.findUnique({ where: { id: screenshotId } });
+    expect(after).toBeNull();
+  });
+
+  it('member CANNOT delete own screenshot past the grace window', async () => {
+    const owner = await setupOrg();
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const { memberWebToken, screenshotId } = await seedMemberScreenshot(owner, tenMinAgo);
+    const app = makeTestApp();
+
+    const del = await request(app)
+      .delete(`/api/v1/screenshots/${screenshotId}`)
+      .set('Authorization', `Bearer ${memberWebToken}`);
+    expect(del.status).toBe(403);
+
+    const stillThere = await prisma.screenshot.findUnique({ where: { id: screenshotId } });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it('admin can still delete past-grace screenshots; only members are bound by the window', async () => {
+    const owner = await setupOrg();
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const { screenshotId } = await seedMemberScreenshot(owner, tenMinAgo);
+    const app = makeTestApp();
+
+    const del = await request(app)
+      .delete(`/api/v1/screenshots/${screenshotId}`)
+      .set('Authorization', `Bearer ${owner.webToken}`);
+    expect(del.status).toBe(204);
   });
 });

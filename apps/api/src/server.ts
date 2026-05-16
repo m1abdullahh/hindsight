@@ -4,6 +4,10 @@ import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
 import { registerProcessScreenshotWorker } from './workers/process-screenshot.js';
+import {
+  ensureRetentionSweepScheduled,
+  registerRetentionSweepWorker,
+} from './workers/retention-sweep.js';
 
 const app = buildApp();
 
@@ -11,7 +15,10 @@ const server = app.listen(config.PORT, '0.0.0.0', () => {
   logger.info({ port: config.PORT }, 'api listening');
 });
 
-const workers = [registerProcessScreenshotWorker()];
+const workers = [registerProcessScreenshotWorker(), registerRetentionSweepWorker()];
+void ensureRetentionSweepScheduled().catch((err: unknown) => {
+  logger.error({ err }, 'failed to schedule retention sweep');
+});
 logger.info({ count: workers.length }, 'workers running');
 
 const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

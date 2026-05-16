@@ -12,6 +12,7 @@ mod db;
 mod idle_watcher;
 mod permissions;
 mod scheduler;
+mod outbox_sweeper;
 mod uploader;
 #[cfg(target_os = "windows")]
 mod win_aumid;
@@ -206,7 +207,8 @@ pub fn run() {
                     }
                 };
                 scheduler::spawn(app_handle.clone(), db.clone(), counters, state_rx);
-                uploader::spawn(app_handle.clone(), db, tokens, api_base_for_async);
+                uploader::spawn(app_handle.clone(), db.clone(), tokens, api_base_for_async);
+                outbox_sweeper::spawn(db);
                 // Idle watcher uses tokio::spawn internally, so it must run
                 // from inside a Tokio runtime context — i.e. after this async
                 // block has started, not from setup() directly.

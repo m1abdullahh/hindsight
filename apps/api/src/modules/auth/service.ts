@@ -144,7 +144,7 @@ const DUMMY_HASH =
   '$argon2id$v=19$m=65536,t=3,p=1$ZHVtbXlzYWx0c2FsdHNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 export async function login(input: LoginInput, ctx: CallerContext = {}): Promise<AuthSuccess> {
-  const status = await checkLogin(input.email);
+  const status = await checkLogin(input.email, ctx.ipAddress);
   if (status.locked) {
     throw new AppError('too_many_attempts', 429, 'too many failed login attempts', {
       retryAfter: status.retryAfter,
@@ -158,7 +158,7 @@ export async function login(input: LoginInput, ctx: CallerContext = {}): Promise
     : (await verifyPassword(DUMMY_HASH, input.password), false);
 
   if (!ok || !user) {
-    await recordFailure(input.email);
+    await recordFailure(input.email, ctx.ipAddress);
     throw new AppError('unauthorized', 401, 'invalid credentials');
   }
 
@@ -442,8 +442,14 @@ export async function changePassword(
 
   await prisma.$transaction(async (tx) => {
     await tx.user.update({ where: { id: userId }, data: { passwordHash: newHash } });
+    // Filter to kind:'web' — device tokens are deliberately preserved on
+    // password change (08-auth-and-permissions.md §"Token revocation rules").
+    // The desktop install is a separately-registered trusted machine; killing
+    // it on every password rotation would silently break in-flight time
+    // entries. Users who want to nuke device tokens too use
+    // "sign out everywhere".
     await tx.token.updateMany({
-      where: { userId, revokedAt: null, id: { not: currentTokenId } },
+      where: { userId, kind: 'web', revokedAt: null, id: { not: currentTokenId } },
       data: { revokedAt: new Date() },
     });
   });

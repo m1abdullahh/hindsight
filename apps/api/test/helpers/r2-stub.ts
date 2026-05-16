@@ -67,7 +67,7 @@ const stubProvider: R2Provider = {
   },
   async headObject(key) {
     const obj = objects.get(key);
-    return obj ? { size: obj.bytes.length } : null;
+    return obj ? { size: obj.bytes.length, contentType: obj.contentType } : null;
   },
   async getObjectBytes(key) {
     const obj = objects.get(key);

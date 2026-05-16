@@ -15,7 +15,7 @@ export type Action =
   | { type: 'projects:read'; assignedToCaller: boolean }
   | { type: 'time_entries:read_all' }
   | { type: 'screenshots:read'; ownerUserId: string }
-  | { type: 'screenshots:delete'; ownerUserId: string }
+  | { type: 'screenshots:delete'; ownerUserId: string; withinGrace: boolean }
   | { type: 'audit:read' }
   | { type: 'devices:register' };
 
@@ -47,9 +47,14 @@ export const can = (m: Membership, action: Action): boolean => {
       return m.userId === action.ownerUserId;
 
     case 'screenshots:delete':
-      // Admins/owners can delete any capture; members can delete only their own.
+      // Admins/owners can delete any capture; members can delete only their
+      // own, and only within the per-capture grace window. The privacy
+      // contract in 09-privacy-and-ethics.md depends on this — once the
+      // window has passed, even the member who took the screenshot cannot
+      // remove it through the API.
       if (m.role === 'owner' || m.role === 'admin') return true;
-      return m.userId === action.ownerUserId;
+      if (m.userId !== action.ownerUserId) return false;
+      return action.withinGrace;
 
     case 'devices:register':
       return true;

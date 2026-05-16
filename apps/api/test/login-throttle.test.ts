@@ -64,6 +64,34 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('login throttle'
     expect(next.status).toBe(429);
   });
 
+  it('failures from one IP do NOT lock the victim from a different IP (account-DoS protection)', async () => {
+    await signup('victim@example.com');
+    const app = makeTestApp();
+
+    // Attacker on 1.2.3.4 exhausts the (victim@…, 1.2.3.4) bucket.
+    for (let i = 0; i < 5; i++) {
+      const r = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Forwarded-For', '1.2.3.4')
+        .send({ email: 'victim@example.com', password: 'definitely-wrong-here' });
+      expect(r.status).toBe(401);
+    }
+
+    // Attacker IP is now locked.
+    const attackerLocked = await request(app)
+      .post('/api/v1/auth/login')
+      .set('X-Forwarded-For', '1.2.3.4')
+      .send({ email: 'victim@example.com', password: 'correct horse battery staple' });
+    expect(attackerLocked.status).toBe(429);
+
+    // But the legitimate user logging in from their own IP still succeeds.
+    const victimOk = await request(app)
+      .post('/api/v1/auth/login')
+      .set('X-Forwarded-For', '9.9.9.9')
+      .send({ email: 'victim@example.com', password: 'correct horse battery staple' });
+    expect(victimOk.status).toBe(200);
+  });
+
   it('successful login below threshold clears the counter', async () => {
     await signup('user@example.com');
     const app = makeTestApp();

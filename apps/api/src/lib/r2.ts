@@ -27,12 +27,17 @@ export interface PresignedGet {
   expiresAt: Date;
 }
 
+export interface HeadResult {
+  size: number;
+  contentType: string | null;
+}
+
 export interface R2Provider {
   presignPut(key: string, contentType: string, maxSizeBytes: number): Promise<PresignedPut>;
   presignGetThumbnail(key: string): Promise<PresignedGet>;
   presignGetFull(key: string): Promise<PresignedGet>;
   deleteObject(key: string): Promise<void>;
-  headObject(key: string): Promise<{ size: number } | null>;
+  headObject(key: string): Promise<HeadResult | null>;
   getObjectBytes(key: string): Promise<Buffer>;
   putObjectBytes(key: string, bytes: Buffer, contentType: string): Promise<void>;
 }
@@ -44,9 +49,20 @@ class S3R2Provider implements R2Provider {
   ) {}
 
   async presignPut(key: string, contentType: string, _maxSizeBytes: number): Promise<PresignedPut> {
-    // Don't sign ContentLength into the URL — the actual upload's body size
-    // would have to match exactly, and the desktop doesn't know the post-encode
-    // size in advance. Size cap is enforced at /confirm via sizeBytes validation.
+    // Deliberately do NOT pin Content-Length into the presigned URL. Doing so
+    // would force the client to declare an exact byte count before upload,
+    // and we'd have to expand presign request schema + change the desktop
+    // protocol to round-trip the post-encode size. Instead, the size +
+    // content-type cap is enforced server-side at /confirm: the screenshot
+    // service HEADs the uploaded object, rejects on overflow or MIME
+    // mismatch, and deletes the offending object before throwing. A
+    // compromised device token can therefore upload garbage briefly, but
+    // nothing the DB ever blesses survives past the next confirm call.
+    //
+    // If we ever want hard upstream rejection (e.g. to cut R2 ingress cost
+    // on a misbehaving device), switch to createPresignedPost with a
+    // content-length-range policy. The desktop would then POST form-data
+    // instead of raw-body PUT.
     void _maxSizeBytes;
     const cmd = new PutObjectCommand({
       Bucket: this.bucket,
@@ -73,10 +89,10 @@ class S3R2Provider implements R2Provider {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 
-  async headObject(key: string): Promise<{ size: number } | null> {
+  async headObject(key: string): Promise<HeadResult | null> {
     try {
       const out = await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
-      return { size: out.ContentLength ?? 0 };
+      return { size: out.ContentLength ?? 0, contentType: out.ContentType ?? null };
     } catch {
       return null;
     }

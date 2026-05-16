@@ -15,7 +15,7 @@ import {
   presignGetThumbnail,
   presignPut,
 } from '../../lib/r2.js';
-import { originalKey } from '../../lib/screenshot-keys.js';
+import { mimeFromKey, originalKey } from '../../lib/screenshot-keys.js';
 import { toScreenshotDto, type ScreenshotDto } from '../../lib/dto.js';
 import { PROCESS_SCREENSHOT_QUEUE } from '../../workers/process-screenshot.js';
 
@@ -25,6 +25,10 @@ const MAX_OBJECT_BYTES = 8 * 1024 * 1024;
 const CAPTURE_GRACE_AFTER_END_MS = 5 * 60 * 1000;
 const CAPTURE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CAPTURE_FUTURE_TOLERANCE_MS = 60 * 1000;
+// How long a member retains the right to delete their own capture. Past this
+// window, only admins/owners can delete — see 09-privacy-and-ethics.md §"Delete
+// recent screenshots."
+const MEMBER_DELETE_GRACE_MS = 5 * 60 * 1000;
 
 let processScreenshotQueue: Queue | null = null;
 const queue = (): Queue => {
@@ -129,13 +133,47 @@ export const confirmScreenshot = async (
     throw new AppError('invalid_input', 422, 'object not found in storage; retry presign + upload');
   }
 
+  // Server-authoritative validation. The body's `sizeBytes` is taken on
+  // trust by the desktop client (and therefore by anyone who steals a
+  // device token) — replace it with what R2 actually stored, and reject
+  // anything larger than the per-object cap or with a mismatched MIME.
+  // On any rejection, delete the underlying object so the bucket doesn't
+  // accumulate uploads that the DB never blessed.
+  const expectedMime = mimeFromKey(row.s3Key);
+  if (head.size > MAX_OBJECT_BYTES) {
+    await deleteObject(row.s3Key).catch(() => undefined);
+    await prisma.screenshot.update({
+      where: { id: row.id },
+      data: { status: 'failed' },
+    });
+    throw new AppError(
+      'invalid_input',
+      413,
+      `uploaded object exceeds ${MAX_OBJECT_BYTES}-byte cap`,
+    );
+  }
+  if (head.contentType && head.contentType !== expectedMime) {
+    await deleteObject(row.s3Key).catch(() => undefined);
+    await prisma.screenshot.update({
+      where: { id: row.id },
+      data: { status: 'failed' },
+    });
+    throw new AppError(
+      'invalid_input',
+      415,
+      `uploaded content-type ${head.contentType} does not match presigned ${expectedMime}`,
+    );
+  }
+
   const updated = await prisma.screenshot.update({
     where: { id: row.id },
     data: {
       status: 'uploaded',
       width: input.width,
       height: input.height,
-      sizeBytes: input.sizeBytes,
+      // Use the R2-reported length as the source of truth; the client value
+      // is kept only as a sanity input hint and discarded here.
+      sizeBytes: head.size,
       activeWindowTitle: input.activeWindowTitle ?? null,
       activeApp: input.activeApp ?? null,
       keyboardEventsCount: input.keyboardEventsCount,
@@ -318,7 +356,14 @@ export const deleteScreenshot = async (caller: Membership, screenshotId: string)
     throw new AppError('forbidden', 403, 'screenshot not in your org');
   }
 
-  if (!can(caller, { type: 'screenshots:delete', ownerUserId: row.timeEntry.userId })) {
+  const withinGrace = Date.now() - row.capturedAt.getTime() <= MEMBER_DELETE_GRACE_MS;
+  if (
+    !can(caller, {
+      type: 'screenshots:delete',
+      ownerUserId: row.timeEntry.userId,
+      withinGrace,
+    })
+  ) {
     throw new AppError('forbidden', 403, 'cannot delete this screenshot');
   }
 

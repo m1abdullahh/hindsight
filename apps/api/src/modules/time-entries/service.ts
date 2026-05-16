@@ -1,5 +1,7 @@
-import type { Membership } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import { type Membership } from '@prisma/client';
 
+import { writeAudit } from '../../auth/audit.js';
 import { AppError } from '../../lib/errors.js';
 import { ulid } from '../../lib/id.js';
 import { prisma } from '../../lib/prisma.js';
@@ -75,7 +77,10 @@ export const updateTimeEntry = async (
   });
   if (!entry) throw new AppError('not_found', 404, 'time entry not found');
 
-  if (entry.userId !== caller.userId && !caller.isAdminOf(entry.project.orgId)) {
+  const isCrossUserAdminEdit =
+    entry.userId !== caller.userId && caller.isAdminOf(entry.project.orgId);
+
+  if (entry.userId !== caller.userId && !isCrossUserAdminEdit) {
     throw new AppError('forbidden', 403, 'cannot modify this time entry');
   }
 
@@ -83,16 +88,70 @@ export const updateTimeEntry = async (
     throw new AppError('conflict', 409, 'time entry is already closed');
   }
 
-  const updated = await prisma.timeEntry.update({
-    where: { id: entry.id },
-    data: {
-      ...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
-      ...(patch.totalActiveSeconds !== undefined
-        ? { totalActiveSeconds: patch.totalActiveSeconds }
-        : {}),
-      ...(patch.totalIdleSeconds !== undefined ? { totalIdleSeconds: patch.totalIdleSeconds } : {}),
-      ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await tx.timeEntry.update({
+      where: { id: entry.id },
+      data: {
+        ...(patch.endedAt !== undefined ? { endedAt: patch.endedAt } : {}),
+        ...(patch.totalActiveSeconds !== undefined
+          ? { totalActiveSeconds: patch.totalActiveSeconds }
+          : {}),
+        ...(patch.totalIdleSeconds !== undefined
+          ? { totalIdleSeconds: patch.totalIdleSeconds }
+          : {}),
+        ...(patch.notes !== undefined ? { notes: patch.notes } : {}),
+      },
+    });
+
+    // When an admin edits a time entry belonging to a different user, record
+    // before/after of each changed field. Time totals roll up into reports
+    // and (eventually) payroll — without this trail there's no way to detect
+    // an admin retroactively bumping someone's hours, or zeroing them out.
+    if (isCrossUserAdminEdit) {
+      const changes: Record<string, { from: unknown; to: unknown }> = {};
+      if (patch.endedAt !== undefined && patch.endedAt?.getTime() !== entry.endedAt?.getTime()) {
+        changes.endedAt = {
+          from: entry.endedAt?.toISOString() ?? null,
+          to: patch.endedAt?.toISOString() ?? null,
+        };
+      }
+      if (
+        patch.totalActiveSeconds !== undefined &&
+        patch.totalActiveSeconds !== entry.totalActiveSeconds
+      ) {
+        changes.totalActiveSeconds = {
+          from: entry.totalActiveSeconds,
+          to: patch.totalActiveSeconds,
+        };
+      }
+      if (
+        patch.totalIdleSeconds !== undefined &&
+        patch.totalIdleSeconds !== entry.totalIdleSeconds
+      ) {
+        changes.totalIdleSeconds = { from: entry.totalIdleSeconds, to: patch.totalIdleSeconds };
+      }
+      if (patch.notes !== undefined && patch.notes !== entry.notes) {
+        // Don't store the full notes text in the audit row — it can grow
+        // unbounded and may itself contain PII. Just record that it changed.
+        changes.notes = { from: '<changed>', to: '<changed>' };
+      }
+
+      if (Object.keys(changes).length > 0) {
+        await writeAudit(tx, {
+          orgId: entry.project.orgId,
+          actorId: caller.userId,
+          action: 'time_entry.updated_by_admin',
+          targetType: 'time_entry',
+          targetId: entry.id,
+          metadata: {
+            targetUserId: entry.userId,
+            changes,
+          } as Prisma.JsonObject,
+        });
+      }
+    }
+
+    return next;
   });
 
   return toTimeEntryDto(updated);

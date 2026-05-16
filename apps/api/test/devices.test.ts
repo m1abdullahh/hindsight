@@ -107,6 +107,62 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('devices', () =>
     expect(devices).toHaveLength(1);
   });
 
+  it('two users sharing an Idempotency-Key do NOT see each other’s register response', async () => {
+    const a = await signup('a@example.com', 'A-Org');
+    const b = await signup('b@example.com', 'B-Org');
+    const app = makeTestApp();
+    const idem = randomUUID();
+
+    const resA = await request(app)
+      .post('/api/v1/devices/register')
+      .set('Authorization', `Bearer ${a.token}`)
+      .set('Idempotency-Key', idem)
+      .send({ deviceName: 'Mac-A', os: 'macos', appVersion: '1.0.0' });
+    expect(resA.status).toBe(201);
+
+    const resB = await request(app)
+      .post('/api/v1/devices/register')
+      .set('Authorization', `Bearer ${b.token}`)
+      .set('Idempotency-Key', idem)
+      .send({ deviceName: 'Mac-B', os: 'macos', appVersion: '1.0.0' });
+    expect(resB.status).toBe(201);
+
+    // Critically: B must receive B's own token, not A's.
+    expect(resB.body.deviceId).not.toBe(resA.body.deviceId);
+    expect(resB.body.deviceToken).not.toBe(resA.body.deviceToken);
+
+    const aDevices = await prisma.device.findMany({ where: { userId: a.userId } });
+    const bDevices = await prisma.device.findMany({ where: { userId: b.userId } });
+    expect(aDevices).toHaveLength(1);
+    expect(bDevices).toHaveLength(1);
+    expect(aDevices[0]!.deviceName).toBe('Mac-A');
+    expect(bDevices[0]!.deviceName).toBe('Mac-B');
+  });
+
+  it('failed (4xx) response is NOT cached; retry can succeed', async () => {
+    const owner = await signup('owner@example.com', 'Acme');
+    const app = makeTestApp();
+    const idem = randomUUID();
+
+    // First attempt: invalid body → 400/422.
+    const bad = await request(app)
+      .post('/api/v1/devices/register')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .set('Idempotency-Key', idem)
+      .send({ deviceName: '' });
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+    expect(bad.status).toBeLessThan(500);
+
+    // Retry with the same key + a valid body → should succeed, not replay the 4xx.
+    const good = await request(app)
+      .post('/api/v1/devices/register')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .set('Idempotency-Key', idem)
+      .send({ deviceName: 'Mac', os: 'macos', appVersion: '1.0.0' });
+    expect(good.status).toBe(201);
+    expect(typeof good.body.deviceToken).toBe('string');
+  });
+
   it('register with device token returns 403', async () => {
     const owner = await signup('owner@example.com', 'Acme');
     const app = makeTestApp();

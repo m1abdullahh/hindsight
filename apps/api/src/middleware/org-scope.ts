@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 
+import { resolveActiveMembership } from '../auth/membership.js';
 import { AppError } from '../lib/errors.js';
-import { prisma } from '../lib/prisma.js';
 
 export const orgScope =
   () =>
@@ -15,19 +15,7 @@ export const orgScope =
         throw new AppError('unauthorized', 401, 'auth required before orgScope');
       }
 
-      const membership = await prisma.membership.findUnique({
-        where: { orgId_userId: { orgId, userId: req.caller.user.id } },
-        include: { organization: { select: { deletedAt: true } } },
-      });
-
-      if (!membership || membership.status !== 'active' || membership.organization.deletedAt) {
-        throw new AppError('forbidden', 403, 'not a member of this org');
-      }
-
-      // Strip the joined organization slice so the typed `Membership`
-      // shape on req.caller stays consistent with the schema row.
-      const { organization: _organization, ...flat } = membership;
-      req.caller.membership = flat;
+      req.caller.membership = await resolveActiveMembership(orgId, req.caller.user.id);
       next();
     } catch (err) {
       next(err);

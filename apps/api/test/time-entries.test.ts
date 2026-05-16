@@ -239,4 +239,57 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('time entries', 
     expect(memberList.body.entries).toHaveLength(1);
     expect(memberList.body.entries[0].userId).toBe(memberUser.id);
   });
+
+  it('admin editing another user’s time entry writes an audit row with before/after', async () => {
+    const owner = await setupOrg();
+    const app = makeTestApp();
+
+    // Seed a member with assignment + an entry they own.
+    const memberUser = await prisma.user.create({
+      data: { id: 'u-target', email: 'target@example.com', name: 'target', passwordHash: 'p' },
+    });
+    await prisma.membership.create({
+      data: { id: 'm-target', orgId: owner.orgId, userId: memberUser.id, role: 'member' },
+    });
+    await prisma.projectAssignment.create({
+      data: { id: 'pa-target', projectId: owner.projectId, userId: memberUser.id },
+    });
+    const memberDev = await registerDevice(
+      (await mintToken({ userId: memberUser.id, kind: 'web' })).plaintext,
+    );
+    const start = await request(app)
+      .post('/api/v1/time-entries')
+      .set('Authorization', `Bearer ${memberDev.deviceToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ projectId: owner.projectId, startedAt: new Date().toISOString() });
+    const entryId = start.body.id as string;
+
+    // Member sets their own totalActiveSeconds (no audit row expected — same user).
+    const memberSelfPatch = await request(app)
+      .patch(`/api/v1/time-entries/${entryId}`)
+      .set('Authorization', `Bearer ${memberDev.deviceToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ totalActiveSeconds: 100 });
+    expect(memberSelfPatch.status).toBe(200);
+
+    // Owner (admin) bumps the member's totalActiveSeconds — should produce an audit row.
+    const adminPatch = await request(app)
+      .patch(`/api/v1/time-entries/${entryId}`)
+      .set('Authorization', `Bearer ${owner.webToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ totalActiveSeconds: 9999 });
+    expect(adminPatch.status).toBe(200);
+
+    const audits = await prisma.auditLog.findMany({
+      where: { action: 'time_entry.updated_by_admin', targetId: entryId },
+    });
+    expect(audits).toHaveLength(1);
+    const meta = audits[0]!.metadata as {
+      targetUserId: string;
+      changes: { totalActiveSeconds: { from: number; to: number } };
+    };
+    expect(meta.targetUserId).toBe(memberUser.id);
+    expect(meta.changes.totalActiveSeconds.from).toBe(100);
+    expect(meta.changes.totalActiveSeconds.to).toBe(9999);
+  });
 });

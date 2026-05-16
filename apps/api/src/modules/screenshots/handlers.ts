@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 
+import { resolveActiveMembership } from '../../auth/membership.js';
 import { AppError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 
@@ -55,52 +56,32 @@ export const listScreenshotsHandler = async (req: Request, res: Response): Promi
   res.status(200).json(page);
 };
 
-export const getScreenshotHandler = async (req: Request, res: Response): Promise<void> => {
+// /screenshots/:id has no orgId in path, so orgScope can't run. Resolve the
+// owning org from the screenshot row and reuse the same membership gate the
+// middleware uses (including organization.deletedAt) to avoid drift.
+const resolveScreenshotMembership = async (req: Request, id: string) => {
   const caller = requireCaller(req);
-  const id = req.params['id'];
-  if (!id) throw new AppError('invalid_input', 400, 'missing screenshot id');
-
-  // Resolve membership in the screenshot's org. We don't have orgScope here
-  // because /screenshots/:id has no orgId in path.
   const row = await prisma.screenshot.findUnique({
     where: { id },
     include: { timeEntry: { include: { project: { select: { orgId: true } } } } },
   });
   if (!row || row.deletedAt) throw new AppError('not_found', 404, 'screenshot not found');
+  const membership = await resolveActiveMembership(row.timeEntry.project.orgId, caller.user.id);
+  return { membership };
+};
 
-  const membership = await prisma.membership.findUnique({
-    where: {
-      orgId_userId: { orgId: row.timeEntry.project.orgId, userId: caller.user.id },
-    },
-  });
-  if (!membership || membership.status !== 'active') {
-    throw new AppError('forbidden', 403, "not a member of this screenshot's org");
-  }
-
+export const getScreenshotHandler = async (req: Request, res: Response): Promise<void> => {
+  const id = req.params['id'];
+  if (!id) throw new AppError('invalid_input', 400, 'missing screenshot id');
+  const { membership } = await resolveScreenshotMembership(req, id);
   const detail = await service.getScreenshot(membership, id);
   res.status(200).json(detail);
 };
 
 export const deleteScreenshotHandler = async (req: Request, res: Response): Promise<void> => {
-  const caller = requireCaller(req);
   const id = req.params['id'];
   if (!id) throw new AppError('invalid_input', 400, 'missing screenshot id');
-
-  const row = await prisma.screenshot.findUnique({
-    where: { id },
-    include: { timeEntry: { include: { project: { select: { orgId: true } } } } },
-  });
-  if (!row || row.deletedAt) throw new AppError('not_found', 404, 'screenshot not found');
-
-  const membership = await prisma.membership.findUnique({
-    where: {
-      orgId_userId: { orgId: row.timeEntry.project.orgId, userId: caller.user.id },
-    },
-  });
-  if (!membership || membership.status !== 'active') {
-    throw new AppError('forbidden', 403, "not a member of this screenshot's org");
-  }
-
+  const { membership } = await resolveScreenshotMembership(req, id);
   await service.deleteScreenshot(membership, id);
   res.status(204).end();
 };

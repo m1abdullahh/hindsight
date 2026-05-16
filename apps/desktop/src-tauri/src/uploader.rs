@@ -4,7 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::auth::DeviceTokenStore;
 use crate::scheduler::emit_outbox_changed;
@@ -28,8 +28,14 @@ pub enum UploadError {
     Http(#[from] reqwest::Error),
     #[error("SQL error: {0}")]
     Sql(#[from] sqlx::Error),
-    #[error("server: {status} {body}")]
-    Server { status: u16, body: String },
+    // API errors are from the Hindsight server — a 401/403 here means our
+    // bearer token is dead. Treated as auth failure by the loop.
+    #[error("api: {status} {body}")]
+    Api { status: u16, body: String },
+    // R2 errors are from the presigned PUT step. Even 401/403 here have
+    // nothing to do with our bearer token (presigned URL signs itself).
+    #[error("r2 put: {status} {body}")]
+    R2Put { status: u16, body: String },
 }
 
 #[derive(Deserialize)]
@@ -96,12 +102,38 @@ pub fn spawn(
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 Err(e) => {
-                    tracing::warn!(err = %e, "upload tick error");
+                    // Treat 401/403 from the API as a server-side
+                    // revocation: clear the local token so the next loop
+                    // iteration short-circuits on NoToken instead of
+                    // burning retries against a dead credential, and tell
+                    // the UI to prompt re-auth so the user actually sees
+                    // why captures have stopped uploading.
+                    if is_auth_failure(&e) {
+                        tracing::warn!(err = %e, "upload auth failure; clearing token");
+                        let _ = tokens.clear();
+                        let _ = app.emit(
+                            "reauth-required",
+                            serde_json::json!({ "reason": e.to_string() }),
+                        );
+                        emit_outbox_changed(&app, &db).await;
+                    } else {
+                        tracing::warn!(err = %e, "upload tick error");
+                    }
                     tokio::time::sleep(Duration::from_secs(10)).await;
                 }
             }
         }
     })
+}
+
+// Auth failures originate at the API only (presign/confirm), not at the R2
+// PUT step — R2 uses the presigned URL's own signature and doesn't see our
+// bearer token. A 401/403 here means the token is dead from the server's
+// perspective (admin revoked, user signed out elsewhere, password reset
+// nuked it). Retrying with the same token is pointless until the user
+// signs in again.
+fn is_auth_failure(err: &UploadError) -> bool {
+    matches!(err, UploadError::Api { status: 401 | 403, .. })
 }
 
 #[derive(sqlx::FromRow)]
@@ -196,7 +228,7 @@ async fn upload_one(
     if !put_res.status().is_success() {
         let status = put_res.status().as_u16();
         let body = put_res.text().await.unwrap_or_default();
-        return Err(UploadError::Server { status, body });
+        return Err(UploadError::R2Put { status, body });
     }
 
     // 3. Confirm
@@ -222,7 +254,7 @@ async fn upload_one(
     if !confirm_res.status().is_success() {
         let status = confirm_res.status().as_u16();
         let body = confirm_res.text().await.unwrap_or_default();
-        return Err(UploadError::Server { status, body });
+        return Err(UploadError::Api { status, body });
     }
 
     // 4. Mark uploaded
@@ -247,7 +279,7 @@ async fn parse_or_err<T: for<'de> Deserialize<'de>>(
     if !res.status().is_success() {
         let status = res.status().as_u16();
         let body = res.text().await.unwrap_or_default();
-        return Err(UploadError::Server { status, body });
+        return Err(UploadError::Api { status, body });
     }
     let v = res.json::<T>().await?;
     Ok(v)
@@ -273,7 +305,7 @@ async fn schedule_retry(db: &SqlitePool, row_id: &str, attempts: i64, err: Strin
 
 #[cfg(test)]
 mod tests {
-    use super::BACKOFF_MS;
+    use super::{is_auth_failure, UploadError, BACKOFF_MS};
 
     #[test]
     fn backoff_schedule_is_monotonic_and_capped() {
@@ -288,5 +320,40 @@ mod tests {
         let attempts: i64 = 100;
         let idx = (attempts.min(BACKOFF_MS.len() as i64 - 1)) as usize;
         assert_eq!(idx, BACKOFF_MS.len() - 1);
+    }
+
+    #[test]
+    fn auth_failure_detects_api_401_and_403() {
+        assert!(is_auth_failure(&UploadError::Api {
+            status: 401,
+            body: String::new()
+        }));
+        assert!(is_auth_failure(&UploadError::Api {
+            status: 403,
+            body: String::new()
+        }));
+    }
+
+    #[test]
+    fn auth_failure_ignores_other_api_statuses_and_r2_errors() {
+        // R2 errors are never our bearer token's fault.
+        assert!(!is_auth_failure(&UploadError::R2Put {
+            status: 401,
+            body: String::new()
+        }));
+        assert!(!is_auth_failure(&UploadError::R2Put {
+            status: 403,
+            body: String::new()
+        }));
+        // 5xx from the API isn't auth — keep retrying.
+        assert!(!is_auth_failure(&UploadError::Api {
+            status: 500,
+            body: String::new()
+        }));
+        // Other API 4xx (e.g. 415 mismatch from /confirm) isn't auth either.
+        assert!(!is_auth_failure(&UploadError::Api {
+            status: 415,
+            body: String::new()
+        }));
     }
 }

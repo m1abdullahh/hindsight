@@ -13,7 +13,14 @@ interface SignupFixture {
   orgId: string;
 }
 
-const signup = async (email: string, organizationName: string): Promise<SignupFixture> => {
+// Most tests want to exercise the invite flow itself, not the verify-before-
+// invite gate. Default to verified; the one test that exercises the gate
+// passes verify=false explicitly.
+const signup = async (
+  email: string,
+  organizationName: string,
+  opts: { verify?: boolean } = {},
+): Promise<SignupFixture> => {
   const app = makeTestApp();
   const res = await request(app)
     .post('/api/v1/auth/signup')
@@ -26,9 +33,13 @@ const signup = async (email: string, organizationName: string): Promise<SignupFi
   if (res.status !== 201) {
     throw new Error(`signup failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
+  const userId = res.body.user.id as string;
+  if (opts.verify !== false) {
+    await prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: new Date() } });
+  }
   return {
     token: res.body.token,
-    userId: res.body.user.id,
+    userId,
     orgId: res.body.organization.id,
   };
 };
@@ -178,7 +189,10 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('invitations', (
 
     expect(acc.status).toBe(201);
     expect(acc.body.user.email).toBe('newbie@example.com');
-    expect(acc.body.user.emailVerifiedAt).not.toBeNull();
+    // Invite-accept no longer auto-verifies email: the new user must go
+    // through the normal verify flow before gaining verify-gated capabilities
+    // (e.g. inviting others).
+    expect(acc.body.user.emailVerifiedAt).toBeNull();
     expect(typeof acc.body.token).toBe('string');
 
     // The token authenticates /me
@@ -344,5 +358,55 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('invitations', (
       .get(`/api/v1/orgs/${owner.orgId}/invitations`)
       .set('Authorization', `Bearer ${memberToken}`);
     expect(res.status).toBe(403);
+  });
+
+  it('unverified owner cannot send invitations', async () => {
+    const unverified = await signup('unverified@example.com', 'Acme', { verify: false });
+    const app = makeTestApp();
+    const res = await request(app)
+      .post(`/api/v1/orgs/${unverified.orgId}/invitations`)
+      .set('Authorization', `Bearer ${unverified.token}`)
+      .send({ email: 'newhire@example.com', role: 'member' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/verify/i);
+  });
+
+  it('accept while signed in as a DIFFERENT user returns 409', async () => {
+    const owner = await signup('owner@example.com', 'Acme');
+    const intruder = await signup('intruder@example.com', 'OtherCo');
+    const app = makeTestApp();
+
+    await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/invitations`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ email: 'newbie@example.com', role: 'member' });
+    const token = lastSentToken();
+
+    const res = await request(app)
+      .post('/api/v1/auth/invitations/accept')
+      .set('Authorization', `Bearer ${intruder.token}`)
+      .send({ token, password: 'first-time-pass-here', name: 'Newbie' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toMatch(/sign out/i);
+  });
+
+  it('accept while signed in as the SAME (already-existing) user attaches membership', async () => {
+    const owner = await signup('owner@example.com', 'Acme');
+    const otherOrgUser = await signup('overlap@example.com', 'OverlapOrg');
+    const app = makeTestApp();
+
+    await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/invitations`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ email: 'overlap@example.com', role: 'member' });
+    const token = lastSentToken();
+
+    const res = await request(app)
+      .post('/api/v1/auth/invitations/accept')
+      .set('Authorization', `Bearer ${otherOrgUser.token}`)
+      .send({ token });
+    expect(res.status).toBe(201);
+    // They now have both memberships.
+    expect(res.body.memberships).toHaveLength(2);
   });
 });

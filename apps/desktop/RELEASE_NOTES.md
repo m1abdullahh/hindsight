@@ -1,3 +1,8 @@
+## What's new
+
+- If your session is revoked from the web app (or by an admin), the desktop now signs you out cleanly with a clear message — captures stay safe in the outbox until you sign back in, and your machine won't quietly retry uploads against a dead session.
+- Uploaded screenshots are now cleared from your local outbox 24 hours after upload, and the row goes away after a week. Your machine no longer holds an ever-growing copy of every screenshot you've ever taken.
+
 ## Fixes
 
 - Switching between the **Track** and **Me** tabs no longer flashes a loading spinner or re-fetches data — your stats stay on screen the moment you click back, and refresh quietly in the background.

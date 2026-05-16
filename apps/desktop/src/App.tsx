@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 
 import { UpdaterDialog } from './components/UpdaterDialog';
 import { Toaster } from './components/ui/toaster';
+import { toast } from './components/ui/use-toast';
 import { LoginScreen } from './screens/LoginScreen';
 import { PermissionGateScreen } from './screens/PermissionGateScreen';
 import { TrackerScreen } from './screens/TrackerScreen';
@@ -17,6 +18,7 @@ export function App() {
   const stage = session((s) => s.stage);
   const setLoggedIn = session((s) => s.setLoggedIn);
   const setPendingUploads = session((s) => s.setPendingUploads);
+  const signOut = session((s) => s.signOut);
   const [booting, setBooting] = useState(true);
   // OS permission gate (macOS Screen Recording). Starts false so that on
   // Windows / X11 — where PermissionGateScreen reports granted immediately
@@ -82,6 +84,26 @@ export function App() {
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [setPendingUploads]);
+
+  // The uploader fires `reauth-required` when an upload hits 401/403 — the
+  // device token has been revoked server-side (admin "revoke device",
+  // password reset, sign-out-everywhere). Without this listener the user
+  // would see captures pile up in the outbox with no indication why.
+  useEffect(() => {
+    const unlistenPromise = listen<{ reason?: string }>('reauth-required', () => {
+      clearTokenCache();
+      signOut();
+      toast({
+        title: 'Signed out',
+        description:
+          'Your session was revoked. Sign in again to resume tracking — captures are safe in the outbox until then.',
+        variant: 'destructive',
+      });
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [signOut]);
 
   return (
     <div className="flex h-dvh flex-col bg-background">

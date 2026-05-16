@@ -86,18 +86,31 @@ const cases: MatrixCase[] = [
   { role: 'member', action: { type: 'screenshots:read', ownerUserId: 'u-other' }, expected: false },
   { role: 'member', action: { type: 'screenshots:read', ownerUserId: 'u-actor' }, expected: true },
 
-  // screenshots:delete — owner/admin always; member only own.
-  { role: 'owner', action: { type: 'screenshots:delete', ownerUserId: 'u-other' }, expected: true },
-  { role: 'admin', action: { type: 'screenshots:delete', ownerUserId: 'u-other' }, expected: true },
+  // screenshots:delete — owner/admin always; member only own AND within grace.
+  {
+    role: 'owner',
+    action: { type: 'screenshots:delete', ownerUserId: 'u-other', withinGrace: false },
+    expected: true,
+  },
+  {
+    role: 'admin',
+    action: { type: 'screenshots:delete', ownerUserId: 'u-other', withinGrace: false },
+    expected: true,
+  },
   {
     role: 'member',
-    action: { type: 'screenshots:delete', ownerUserId: 'u-other' },
+    action: { type: 'screenshots:delete', ownerUserId: 'u-other', withinGrace: true },
     expected: false,
   },
   {
     role: 'member',
-    action: { type: 'screenshots:delete', ownerUserId: 'u-actor' },
+    action: { type: 'screenshots:delete', ownerUserId: 'u-actor', withinGrace: true },
     expected: true,
+  },
+  {
+    role: 'member',
+    action: { type: 'screenshots:delete', ownerUserId: 'u-actor', withinGrace: false },
+    expected: false,
   },
 ];
 

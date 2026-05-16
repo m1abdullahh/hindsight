@@ -60,6 +60,18 @@ export const createInvite = async (
   const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
 
   const result = await prisma.$transaction(async (tx) => {
+    // Unverified users cannot invite others (08-auth-and-permissions.md
+    // §"Email verification"). Without this check, an attacker who signs up
+    // under a typo'd address they don't control can still seed memberships
+    // into the org they created.
+    const actorUser = await tx.user.findUniqueOrThrow({
+      where: { id: actor.userId },
+      select: { emailVerifiedAt: true },
+    });
+    if (!actorUser.emailVerifiedAt) {
+      throw new AppError('forbidden', 403, 'verify your email before inviting others');
+    }
+
     // Reject if already an active member.
     const existingUser = await tx.user.findUnique({ where: { email: input.email } });
     if (existingUser) {
@@ -210,7 +222,7 @@ export interface AcceptInviteResult {
 
 export const acceptInvite = async (
   input: AcceptInviteInput,
-  ctx: CallerContext = {},
+  ctx: CallerContext & { authenticatedUserEmail?: string } = {},
 ): Promise<AcceptInviteResult> => {
   const tokenHash = sha256(input.token);
 
@@ -218,6 +230,21 @@ export const acceptInvite = async (
   const inv = await prisma.invitation.findUnique({ where: { tokenHash } });
   if (!inv || inv.acceptedAt || inv.revokedAt || inv.expiresAt < new Date()) {
     throw new AppError('not_found', 404, 'invitation not valid');
+  }
+
+  // If the caller arrived with a live session for a *different* email than
+  // the invitation, refuse — the documented contract (08-auth-and-permissions
+  // §"Invitation acceptance") is to ask them to log out first, not silently
+  // attach the membership to whichever account happens to be signed in.
+  if (
+    ctx.authenticatedUserEmail &&
+    ctx.authenticatedUserEmail.toLowerCase() !== inv.email.toLowerCase()
+  ) {
+    throw new AppError(
+      'conflict',
+      409,
+      `this invitation was sent to ${inv.email} — sign out first to accept it`,
+    );
   }
 
   const existingUser = await prisma.user.findUnique({ where: { email: inv.email } });
@@ -261,13 +288,17 @@ export const acceptInvite = async (
 
       let user;
       if (isNewUser) {
+        // Do NOT auto-set emailVerifiedAt here. Clicking the invite link is
+        // only weak evidence of mailbox control (forwarders, shared inboxes,
+        // an admin who controls the address). The user goes through the
+        // normal /auth/email/verify flow before gaining verify-gated
+        // capabilities (e.g. inviting others — see createInvite).
         user = await tx.user.create({
           data: {
             id: ulid(),
             email: live.email,
             passwordHash,
             name: input.name!,
-            emailVerifiedAt: new Date(),
           },
         });
       } else {
