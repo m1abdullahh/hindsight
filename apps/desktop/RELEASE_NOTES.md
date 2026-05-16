@@ -1,6 +1,6 @@
 ## What's new
 
-- If your session is revoked from the web app (or by an admin), the desktop now signs you out cleanly with a clear message — captures stay safe in the outbox until you sign back in, and your machine won't quietly retry uploads against a dead session.
+- If your session is revoked from the web app (or by an admin), the desktop notices within seconds — even when you're idle and not actively tracking — and signs you out cleanly with a clear message. Captures stay safe in the outbox until you sign back in, and your machine won't quietly retry uploads against a dead session.
 - Uploaded screenshots are now cleared from your local outbox 24 hours after upload, and the row goes away after a week. Your machine no longer holds an ever-growing copy of every screenshot you've ever taken.
 
 ## Fixes

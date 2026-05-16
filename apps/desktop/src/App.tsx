@@ -85,13 +85,18 @@ export function App() {
     };
   }, [setPendingUploads]);
 
-  // The uploader fires `reauth-required` when an upload hits 401/403 — the
-  // device token has been revoked server-side (admin "revoke device",
-  // password reset, sign-out-everywhere). Without this listener the user
-  // would see captures pile up in the outbox with no indication why.
+  // `reauth-required` fires whenever any authenticated path sees a 401/403:
+  // the Rust uploader on an upload attempt, AND api.ts on any other call
+  // (presence heartbeat, manual fetches, start-tracking). Without the
+  // api.ts path the desktop would sit silent on a revoked token while
+  // idle, because the uploader only runs when there's outbox work to do.
   useEffect(() => {
     const unlistenPromise = listen<{ reason?: string }>('reauth-required', () => {
+      // Clear both the in-memory cache and the persisted token file —
+      // otherwise next launch would read the dead token from disk and
+      // re-hit the same 401 silently before the user even sees the UI.
       clearTokenCache();
+      void invoke('clear_device_token').catch(() => undefined);
       signOut();
       toast({
         title: 'Signed out',

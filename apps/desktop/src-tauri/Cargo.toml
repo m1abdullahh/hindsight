@@ -1,6 +1,6 @@
 [package]
 name = "hindsight"
-version = "0.1.1"
+version = "0.2.1"
 description = "Hindsight desktop tracker"
 edition = "2021"
 rust-version = "1.77"
@@ -28,9 +28,17 @@ screenshots = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 # Local outbox + upload
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "chrono"] }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "sqlite",
+    "macros",
+    "chrono",
+] }
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 
 # Idle detection (cross-platform)
 user-idle = "0.6"

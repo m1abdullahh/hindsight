@@ -1,4 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
+
+import { session } from './session-store';
 
 declare const __API_BASE_URL__: string;
 
@@ -50,6 +53,24 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   if (res.status === 204) return undefined as T;
 
   if (!res.ok) {
+    // Centralized auth-failure handling. The uploader emits reauth-required
+    // when an upload sees a 401/403, but it only runs when there's work in
+    // the outbox — an idle desktop with a revoked token would otherwise
+    // sit silent until the user manually tried to do something. Every other
+    // authenticated path (presence heartbeat, manual fetch, start-tracking)
+    // funnels through this function, so doing it here covers them all.
+    //
+    // Suppressed during boot: the /auth/me validation request runs while
+    // stage is still 'login', and a 401 there is the "stale token at
+    // startup" case App.tsx already handles cleanly. Firing the toast
+    // then would tell a logged-out user their session was revoked.
+    if ((res.status === 401 || res.status === 403) && token) {
+      cachedToken = null;
+      if (session.getState().stage !== 'login') {
+        void emit('reauth-required', { reason: `api ${res.status}` });
+      }
+    }
+
     let code = 'internal';
     let message = res.statusText || `HTTP ${res.status}`;
     let details: unknown;
