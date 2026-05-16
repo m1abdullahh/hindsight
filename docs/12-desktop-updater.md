@@ -68,10 +68,9 @@ The workflow at [.github/workflows/desktop-release.yml](../.github/workflows/des
 
 ### 4. Verify the first signed release
 
-```bash
-git tag desktop-v0.1.1
-git push origin desktop-v0.1.1
-```
+Trigger the workflow manually: GitHub → **Actions** tab → **Desktop release** → **Run workflow**. Enter `desktop-v0.1.1` as the tag name and submit.
+
+> **Why not `git tag && git push`?** The workflow used to listen to `push: tags`, but publishing the draft release this workflow creates _also_ creates the underlying git tag, which would re-fire the workflow under your user account and burn another full set of build minutes. So `workflow_dispatch` is now the only trigger.
 
 The workflow will build all three platforms, sign each installer, generate `latest.json`, and attach everything to a **draft** release. Inspect the draft to confirm:
 
@@ -79,14 +78,14 @@ The workflow will build all three platforms, sign each installer, generate `late
 - Each platform has both the installer and a `.sig` file
 - Opening `latest.json` shows real signature blobs (not empty strings)
 
-Promote the draft to **published** (uncheck "Set as a pre-release", click Publish). At that point the `/releases/latest/...` URL resolves and existing installs will start picking up the update on their next poll.
+Promote the draft to **published** (uncheck "Set as a pre-release", click Publish). At that point the `/releases/latest/...` URL resolves and existing installs will start picking up the update on their next poll. The repo must be **public** for the `/releases/latest/download/latest.json` URL to be reachable without auth — if you flip the repo back to private later, the updater will start 404'ing.
 
 ## Rolling out updates
 
-1. Bump `version` in [apps/desktop/src-tauri/tauri.conf.json](../apps/desktop/src-tauri/tauri.conf.json) and [apps/desktop/package.json](../apps/desktop/package.json).
-2. Tag and push: `git tag desktop-v0.1.2 && git push origin desktop-v0.1.2`.
+1. Bump `version` in [apps/desktop/src-tauri/tauri.conf.json](../apps/desktop/src-tauri/tauri.conf.json) and [apps/desktop/package.json](../apps/desktop/package.json). Commit and push to `main`.
+2. GitHub → **Actions** tab → **Desktop release** → **Run workflow**. Enter the tag name (e.g. `desktop-v0.1.2`) and submit.
 3. Wait for the workflow to finish (~15 min for all three platforms).
-4. Edit the resulting draft release: paste in release notes (they become `notes` in `latest.json` and show up in the in-app dialog), then click **Publish release**.
+4. Edit the resulting draft release: paste in release notes (they become `notes` in `latest.json` and show up in the in-app dialog), then click **Publish release**. Publishing creates the git tag but does **not** re-trigger the workflow (the `push: tags` trigger was removed for exactly this reason).
 
 Installs poll every 6 h after boot (and 30 s after the first launch), so the rollout reaches everyone within a day. If a user has the app open continuously, they'll see the prompt on the next poll.
 

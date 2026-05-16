@@ -1,9 +1,11 @@
 name: Desktop release
 
 on:
-  push:
-    tags:
-      - 'desktop-v*'
+  # Manual trigger only. We deliberately do NOT listen to `push: tags` because
+  # publishing the draft release this workflow creates would itself create the
+  # git tag (drafts have no tag until publish), which would re-fire this
+  # workflow under your user account and burn another full set of build
+  # minutes. Always trigger from the Actions tab.
   workflow_dispatch:
     inputs:
       tag:
@@ -126,8 +128,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'Hindsight ${{ github.event.inputs.tag || github.ref_name }}'
+          tagName: ${{ github.event.inputs.tag }}
+          releaseName: 'Hindsight ${{ github.event.inputs.tag }}'
           releaseBody: 'Hindsight desktop build. Download the installer for your platform below.'
           releaseDraft: true
           prerelease: false
