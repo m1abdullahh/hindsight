@@ -144,13 +144,32 @@ export function TrackerScreen() {
       {/* Tabs */}
       <Tabs tab={tab} setTab={setTab} />
 
-      {/* Tab content */}
+      {/* Tab content. All tabs stay mounted; inactive ones get `display: none`
+          via Tailwind's `hidden` class so their state, effects, and polling
+          intervals survive across tab switches. Switching back is instant —
+          no loading spinner, no re-fetch — and TrackTab's idle-accumulation
+          refs aren't reset out from under an active session. Each tab gets
+          `isActive` so it can fire a silent background refetch on activation
+          (stale-while-revalidate: show cached data immediately, refresh
+          behind the scenes so e.g. an unassigned project quietly drops out
+          of the picker before the user clicks Start). Active wrapper is
+          `flex flex-1 flex-col` so children that rely on being a flex child
+          (e.g. MeTab's centered empty state) still work. */}
       <div className="flex flex-1 flex-col overflow-y-auto">
-        {tab === 'track' && (
-          <TrackTab currentOrgId={currentOrgId} organizations={organizations} setOrg={setOrg} />
-        )}
-        {tab === 'me' && <MeTab currentOrgId={currentOrgId} />}
-        {tab === 'settings' && <SettingsTab signOut={signOut} />}
+        <div className={tab === 'track' ? 'flex flex-1 flex-col' : 'hidden'}>
+          <TrackTab
+            currentOrgId={currentOrgId}
+            organizations={organizations}
+            setOrg={setOrg}
+            isActive={tab === 'track'}
+          />
+        </div>
+        <div className={tab === 'me' ? 'flex flex-1 flex-col' : 'hidden'}>
+          <MeTab currentOrgId={currentOrgId} isActive={tab === 'me'} />
+        </div>
+        <div className={tab === 'settings' ? 'flex flex-1 flex-col' : 'hidden'}>
+          <SettingsTab signOut={signOut} />
+        </div>
       </div>
 
       {/* Footer */}
@@ -196,10 +215,12 @@ function TrackTab({
   currentOrgId,
   organizations,
   setOrg,
+  isActive,
 }: {
   currentOrgId: string | null;
   organizations: { id: string; name: string }[];
   setOrg: (id: string) => void;
+  isActive: boolean;
 }) {
   const stage = session((s) => s.stage);
   const currentProject = session((s) => s.currentProject);
@@ -218,7 +239,12 @@ function TrackTab({
 
   const [projects, setProjects] = useState<ProjectDto[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
-  const [loadingProjects, setLoadingProjects] = useState(true);
+  // `hasLoadedOnce` toggles once the first fetch (success OR failure) returns.
+  // Spinner is shown when this is false; subsequent refetches stay silent and
+  // just swap the data in. Reset on org change so the new org's first fetch
+  // shows the spinner instead of stale (wrong-org) data.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const loadingProjects = !hasLoadedOnce;
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -267,30 +293,49 @@ function TrackTab({
   const computeIdleSecondsRef = useRef(computeIdleSeconds);
   computeIdleSecondsRef.current = computeIdleSeconds;
 
-  // Fetch projects on org change
+  // Reset cached projects + the "have we loaded yet" flag on org change so
+  // the new org's first fetch shows the spinner rather than briefly flashing
+  // the previous org's projects (which would also be wrong to act on).
   useEffect(() => {
-    if (!currentOrgId) {
-      setLoadingProjects(false);
+    setProjects([]);
+    setHasLoadedOnce(false);
+  }, [currentOrgId]);
+
+  // Fetch projects whenever the tab becomes active for the current org.
+  //   - First activation: `hasLoadedOnce` is false → spinner shows until the
+  //     fetch returns.
+  //   - Subsequent activations (user comes back from Me/Settings): silent
+  //     refetch — cached projects stay visible, a no-longer-assigned project
+  //     quietly drops out when the GET lands. The Start button's onStart
+  //     handler is the safety net if the user clicks Start during the small
+  //     window before the silent refetch has updated the list.
+  useEffect(() => {
+    if (!isActive || !currentOrgId) {
+      if (!currentOrgId) setHasLoadedOnce(true);
       return;
     }
-    setLoadingProjects(true);
     let cancelled = false;
     apiGet<ProjectsResponse>(`/orgs/${currentOrgId}/projects`)
       .then((r) => {
         if (cancelled) return;
-        setProjects(r.projects.filter((p) => !p.archivedAt));
+        const next = r.projects.filter((p) => !p.archivedAt);
+        setProjects(next);
+        // If the user had a project selected and it just disappeared (e.g.
+        // unassigned in the web admin), drop the selection so the picker
+        // doesn't dangle and the Start button correctly disables.
+        setSelectedId((prev) => (prev && !next.some((p) => p.id === prev) ? '' : prev));
       })
       .catch(() => {
-        if (cancelled) return;
-        // Toast handled in start flow; here we just leave the list empty.
+        // Silent. If the network is flaky we keep showing cached projects;
+        // the next activation tries again.
       })
       .finally(() => {
-        if (!cancelled) setLoadingProjects(false);
+        if (!cancelled) setHasLoadedOnce(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [currentOrgId]);
+  }, [isActive, currentOrgId]);
 
   // Periodic flush of totalActiveSeconds while tracking. We deliberately keep
   // activeSec/computeIdleSeconds out of deps (read via refs) — otherwise the
@@ -809,7 +854,7 @@ interface ScreenshotDetailResponse {
   orgId: string;
 }
 
-function MeTab({ currentOrgId }: { currentOrgId: string | null }) {
+function MeTab({ currentOrgId, isActive }: { currentOrgId: string | null; isActive: boolean }) {
   const user = session((s) => s.user);
   const memberships = session((s) => s.memberships);
   const currentMembership = currentOrgId
@@ -847,12 +892,24 @@ function MeTab({ currentOrgId }: { currentOrgId: string | null }) {
   }, [currentOrgId, userId]);
 
   // Poll every 30s so the values stay in lockstep with the web dashboard.
+  // The interval keeps ticking even while the tab is hidden (the component
+  // stays mounted across switches), so coming back to this tab always shows
+  // data that's at most 30s old.
   useEffect(() => {
     if (!currentOrgId || !userId) return;
     void refresh();
     const id = window.setInterval(() => void refresh(), 30_000);
     return () => window.clearInterval(id);
   }, [currentOrgId, userId, refresh]);
+
+  // On every tab activation, kick a silent refresh so the user never sees
+  // data older than ~the time they were on another tab. `refresh()` itself
+  // doesn't touch `loaded` (the spinner gate), so this never flashes UI —
+  // numbers and thumbnails just update in place when the GET lands.
+  useEffect(() => {
+    if (!isActive) return;
+    void refresh();
+  }, [isActive, refresh]);
 
   const totalSeconds = useMemo(
     () => totals.reduce((s, r) => s + r.totalActiveSeconds, 0),
