@@ -82,10 +82,16 @@ Promote the draft to **published** (uncheck "Set as a pre-release", click Publis
 
 ## Rolling out updates
 
-1. Bump `version` in [apps/desktop/src-tauri/tauri.conf.json](../apps/desktop/src-tauri/tauri.conf.json) and [apps/desktop/package.json](../apps/desktop/package.json). Commit and push to `main`.
-2. GitHub → **Actions** tab → **Desktop release** → **Run workflow**. Enter the tag name (e.g. `desktop-v0.1.2`) and submit.
-3. Wait for the workflow to finish (~15 min for all three platforms).
-4. Edit the resulting draft release: paste in release notes (they become `notes` in `latest.json` and show up in the in-app dialog), then click **Publish release**. Publishing creates the git tag but does **not** re-trigger the workflow (the `push: tags` trigger was removed for exactly this reason).
+1. Bump `version` in [apps/desktop/src-tauri/tauri.conf.json](../apps/desktop/src-tauri/tauri.conf.json) and [apps/desktop/package.json](../apps/desktop/package.json).
+2. Write user-facing notes to `apps/desktop/RELEASE_NOTES.md` (Markdown is fine; it shows up rendered on the GitHub release page and as plain text in the in-app updater dialog). Skip this file and the release falls back to a generic line — fine for chore releases, weak for anything users should know about.
+3. Commit both and push to `main`.
+4. GitHub → **Actions** tab → **Desktop release** → **Run workflow**. Enter the tag name (e.g. `desktop-v0.1.2`) and submit.
+5. Wait for the workflow to finish (~15 min for all three platforms).
+6. Open the resulting draft release. The body is already populated from `RELEASE_NOTES.md`; tweak if you want, then click **Publish release**. Publishing creates the git tag but does **not** re-trigger the workflow (the `push: tags` trigger was removed for exactly this reason).
+
+> **Important:** edits to the release body in the GitHub UI **don't** propagate into `latest.json`. tauri-action bakes the body in at build time, so anything you change post-publish only updates the GitHub page — the in-app dialog still shows what was baked. If you need to change the in-app text after publishing, you'd have to download `latest.json` from the release, edit the `notes` field, re-upload, and re-publish (clunky — avoid this by getting `RELEASE_NOTES.md` right before triggering).
+
+`RELEASE_NOTES.md` is not auto-cleared after a release. Leaving stale notes in place means the next release ships with the previous release's text — annoying but recoverable. Either edit it as part of each version bump commit, or `git rm` it after publishing.
 
 Installs poll every 6 h after boot (and 30 s after the first launch), so the rollout reaches everyone within a day. If a user has the app open continuously, they'll see the prompt on the next poll.
 

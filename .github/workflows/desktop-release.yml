@@ -113,6 +113,26 @@ jobs:
           # and the private key is accessible.
           security find-identity -p codesigning "$KEYCHAIN_PATH"
 
+      # Notes for this release. If apps/desktop/RELEASE_NOTES.md exists and is
+      # non-empty, its contents become the release body — which tauri-action
+      # bakes into BOTH the GitHub release page and latest.json's `notes`
+      # field, so the same text appears in the in-app auto-updater dialog.
+      # Falls back to a generic line so a missing file doesn't break the build.
+      - name: Read release notes
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            if [ -s apps/desktop/RELEASE_NOTES.md ]; then
+              cat apps/desktop/RELEASE_NOTES.md
+            else
+              echo 'Hindsight desktop build. Download the installer for your platform below.'
+            fi
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,7 +150,7 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.event.inputs.tag }}
           releaseName: 'Hindsight ${{ github.event.inputs.tag }}'
-          releaseBody: 'Hindsight desktop build. Download the installer for your platform below.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           # Generates latest.json from the build artifacts and uploads it as a
