@@ -218,6 +218,20 @@ pub fn run() {
             // 5. Tray icon + menu.
             setup_tray(app)?;
 
+            // 6. Explicitly bring the main window to the foreground. On a
+            //    normal launch from the dock this happens automatically via
+            //    LaunchServices, but after the auto-updater calls
+            //    `relaunch()` the old process exits before the new one is
+            //    visible — macOS then opens the new process in the
+            //    background and the user has to click the dock icon to
+            //    surface the window. Calling show()+set_focus() here is a
+            //    no-op for a normal launch and corrects the post-update
+            //    case on every platform.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
