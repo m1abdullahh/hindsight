@@ -54,9 +54,9 @@ fn set_tracking(
 
 /// Shows a Windows toast notifying the user they just returned from idle.
 /// Uses our AUMID directly so it shows "Hindsight" as the source even in dev.
-/// The actual Keep/Discard buttons live in the inline banner inside the app —
-/// this toast is just a heads-up since the user is usually somewhere else
-/// (browser, other app) when they come back from being away.
+/// The user is usually focused on a different app when they come back, so the
+/// toast is the only signal they get that tracking has resumed and captures
+/// will start again on the next scheduler tick.
 #[tauri::command]
 fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -66,7 +66,7 @@ fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
         Toast::new("app.hindsight.desktop")
             .title("Hindsight")
             .text1(&format!("You were idle for {}", label))
-            .text2("Open Hindsight to keep or discard this time.")
+            .text2("Tracker resumed")
             .show()
             .map_err(|e| e.to_string())?;
     }

@@ -2,7 +2,6 @@ import type { ProjectDto, ScreenshotDto, TimeEntryDto } from '@hindsight/shared/
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  AlertCircle,
   LogOut,
   Pause as PauseIcon,
   Play as PlayIcon,
@@ -361,12 +360,11 @@ function TrackTab({
     ? Math.max(60, currentProject.idleTimeoutMinutes * 60)
     : DEFAULT_IDLE_THRESHOLD_SECONDS;
 
-  // Pending idle prompt: seconds the user just spent idle, awaiting Keep/Discard.
-  const [pendingIdleSec, setPendingIdleSec] = useState<number | null>(null);
-
-  // OS idle detection — pauses on idle, prompts to keep/discard on resume.
+  // OS idle detection — pauses on idle, fires toasts on pause + resume.
   // Also propagates the pause state to the native scheduler so screenshot
-  // capture suspends along with time tracking.
+  // capture suspends along with time tracking. Idle time is always kept on
+  // the entry (no Discard option in the UI); the activity % in reports
+  // reflects the real ratio of active to idle.
   useEffect(() => {
     if (!tracking) return;
 
@@ -396,19 +394,17 @@ function TrackTab({
           console.warn('[idle] pause toast invoke failed', err);
         });
       } else if (idle < idleThresholdSec && reason === 'idle') {
-        // Capture how long the just-ended idle block lasted before clearing
-        // the accrual cursor so the user can review it. Fire a Windows toast
-        // too — when the user returns from being away they're usually focused
-        // somewhere else, so the inline banner alone is easy to miss.
+        // Compute the just-ended idle block's duration for the resume toast.
+        // The user is usually focused on a different app when they come back,
+        // so the toast is the only signal they get that tracking has resumed.
         const startedAt = lastIdleAccrualAtRef.current;
 
         console.log('[idle] -> resuming, startedAt=', startedAt);
         if (startedAt !== null) {
           const blockSec = Math.floor((Date.now() - startedAt) / 1000);
 
-          console.log('[idle] block was', blockSec, 'seconds, firing toast + banner');
+          console.log('[idle] block was', blockSec, 'seconds, firing resume toast');
           if (blockSec > 0) {
-            setPendingIdleSec(blockSec);
             void invoke('show_idle_resume_toast', { idleSeconds: blockSec }).catch((err) => {
               console.warn('[idle] toast invoke failed', err);
             });
@@ -430,16 +426,6 @@ function TrackTab({
       void unlistenPromise.then((u) => u());
     };
   }, [tracking, idleThresholdSec, pauseSession, resumeSession]);
-
-  const onKeepIdle = () => setPendingIdleSec(null);
-  const onDiscardIdle = () => {
-    // Remove the just-ended idle block from the accumulator so the server
-    // never sees it in totalIdleSeconds on the next flush.
-    if (pendingIdleSec !== null) {
-      idleSecondsRef.current = Math.max(0, idleSecondsRef.current - pendingIdleSec);
-    }
-    setPendingIdleSec(null);
-  };
 
   // Today's totals across all projects
   const todayQuery = useTodayTotalsForOrg(currentOrgId);
@@ -586,11 +572,6 @@ function TrackTab({
             </SelectContent>
           </Select>
         </div>
-      )}
-
-      {/* Idle resume prompt — Keep / Discard the just-ended idle block. */}
-      {pendingIdleSec !== null && (
-        <IdleResumePrompt seconds={pendingIdleSec} onKeep={onKeepIdle} onDiscard={onDiscardIdle} />
       )}
 
       {/* Timer block */}
@@ -751,48 +732,6 @@ function TrackTab({
         <ActivityBar segments={segments} height={22} />
       </div>
     </>
-  );
-}
-
-function IdleResumePrompt({
-  seconds,
-  onKeep,
-  onDiscard,
-}: {
-  seconds: number;
-  onKeep: () => void;
-  onDiscard: () => void;
-}) {
-  return (
-    <div className="mx-4 mt-3 rounded-md border border-warn/40 bg-warn/10 px-3 py-2.5">
-      <div className="flex items-start gap-2">
-        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warn" />
-        <div className="min-w-0 flex-1">
-          <div className="text-[12.5px] font-medium text-foreground">
-            You were idle for {formatHoursShort(seconds)}
-          </div>
-          <p className="mt-0.5 text-[11.5px] text-ink3">
-            Keep the idle time on this entry, or discard it so it doesn&apos;t count.
-          </p>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={onDiscard}
-              className="inline-flex h-7 items-center rounded-md border border-border-strong bg-card px-2.5 text-[12px] font-medium hover:bg-muted"
-            >
-              Discard idle
-            </button>
-            <button
-              type="button"
-              onClick={onKeep}
-              className="inline-flex h-7 items-center rounded-md bg-foreground px-2.5 text-[12px] font-medium text-background hover:opacity-90"
-            >
-              Keep
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
