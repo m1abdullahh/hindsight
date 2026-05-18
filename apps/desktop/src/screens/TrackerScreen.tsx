@@ -388,6 +388,13 @@ function TrackTab({
             },
           });
         }
+        // Heads-up toast: the user is usually away from the keyboard at this
+        // point, so the inline "paused" UI inside the app is invisible to them.
+        // The toast is the only way they learn captures have stopped until they
+        // come back. Mirror show_idle_resume_toast: fire-and-forget, errors logged.
+        void invoke('show_idle_pause_toast').catch((err) => {
+          console.warn('[idle] pause toast invoke failed', err);
+        });
       } else if (idle < idleThresholdSec && reason === 'idle') {
         // Capture how long the just-ended idle block lasted before clearing
         // the accrual cursor so the user can review it. Fire a Windows toast

@@ -2,6 +2,7 @@
 
 - If your session is revoked from the web app (or by an admin), the desktop notices within seconds — even when you're idle and not actively tracking — and signs you out cleanly with a clear message. Captures stay safe in the outbox until you sign back in, and your machine won't quietly retry uploads against a dead session.
 - Uploaded screenshots are now cleared from your local outbox 24 hours after upload, and the row goes away after a week. Your machine no longer holds an ever-growing copy of every screenshot you've ever taken.
+- When you go idle and the tracker auto-pauses, you'll now get a Windows notification — same as the one you see for screenshots — so you know captures have stopped until you're back.
 
 ## Fixes
 

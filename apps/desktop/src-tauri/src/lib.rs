@@ -77,6 +77,26 @@ fn show_idle_resume_toast(idle_seconds: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Shows a Windows toast when the tracker auto-pauses due to OS-level idle.
+/// Mirrors `notify_capture` (scheduler.rs) so the source attribution is
+/// "Hindsight" even in dev builds. Fires once per idle transition; the
+/// scheduler stops capturing immediately after, so this is the only chance
+/// the user has to notice the pause before they return to the keyboard.
+#[tauri::command]
+fn show_idle_pause_toast() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_winrt_notification::Toast;
+        Toast::new("app.hindsight.desktop")
+            .title("Hindsight")
+            .text1("Tracker paused — you're idle")
+            .text2("Captures stop until you're back.")
+            .show()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Reports OS-level permission status for screen recording. On non-macOS
 /// platforms this always returns Granted so the renderer can skip the gate.
 #[tauri::command]
@@ -170,6 +190,7 @@ pub fn run() {
             clear_device_token,
             set_tracking,
             show_idle_resume_toast,
+            show_idle_pause_toast,
             check_screen_capture_permission,
             request_screen_capture_permission,
             open_screen_capture_settings,
