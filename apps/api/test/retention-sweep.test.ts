@@ -80,10 +80,10 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('retention sweep
     await prisma.$disconnect();
   });
 
-  it('deletes screenshot rows + R2 objects past the 90-day cutoff; leaves recent rows alone', async () => {
+  it('deletes screenshot rows + R2 objects past the 65-day cutoff; leaves recent rows alone', async () => {
     await seedOrg('o1', 'u1', 'p1');
 
-    const old = await seedScreenshot('p1', 'u1', new Date(Date.now() - 91 * 24 * 60 * 60 * 1000));
+    const old = await seedScreenshot('p1', 'u1', new Date(Date.now() - 66 * 24 * 60 * 60 * 1000));
     const recent = await seedScreenshot('p1', 'u1', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
 
     const result = await _sweepOnceForTests();
@@ -98,7 +98,7 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('retention sweep
 
   it('is idempotent: a second run with no new expirations does nothing', async () => {
     await seedOrg('o1', 'u1', 'p1');
-    await seedScreenshot('p1', 'u1', new Date(Date.now() - 91 * 24 * 60 * 60 * 1000));
+    await seedScreenshot('p1', 'u1', new Date(Date.now() - 66 * 24 * 60 * 60 * 1000));
 
     const first = await _sweepOnceForTests();
     expect(first.deletedRows).toBe(1);

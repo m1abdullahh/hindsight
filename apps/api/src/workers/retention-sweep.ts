@@ -8,10 +8,13 @@ import { redis } from '../lib/redis.js';
 export const RETENTION_SWEEP_QUEUE = 'retention-sweep';
 
 // Hard-coded for v1 until per-org configurability lands. The doc commits to
-// "90-day default, configurable per org down to 14 days"
-// (09-privacy-and-ethics.md §"Retention is finite"). When the
-// Organization.retentionDays field exists, swap this for a per-row lookup.
-const RETENTION_DAYS = 90;
+// "65-day default, configurable per org down to 14 days"
+// (09-privacy-and-ethics.md §"Retention is finite"). 65 covers any
+// "current month + previous month" view even when both months have 31 days
+// (e.g. viewing 1 July from 31 August = 61 days; 65 leaves a small buffer).
+// When the Organization.retentionDays field exists, swap this for a per-row
+// lookup.
+const RETENTION_DAYS = 65;
 const BATCH_SIZE = 500;
 // Repeat once per 24h via BullMQ's repeatable jobs. The job is idempotent
 // (the WHERE clause includes the cutoff, so running it twice does no extra

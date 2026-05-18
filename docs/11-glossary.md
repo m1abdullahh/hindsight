@@ -52,7 +52,7 @@ Plain-English definitions for terms used across the project. When in doubt, use 
 
 **R2** — Cloudflare's S3-compatible object storage. Hosts every screenshot we collect.
 
-**Retention** — How long screenshots are kept before being hard-deleted. Default 90 days; configurable per org down to 14.
+**Retention** — How long screenshots are kept before being hard-deleted. Default 65 days (covers any "current + previous month" view with a small buffer); configurable per org down to 14.
 
 **Role** — One of `owner`, `admin`, `member`. Lives on a membership, not on a user.
 

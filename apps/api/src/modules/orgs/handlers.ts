@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { AppError } from '../../lib/errors.js';
 
 import * as service from './service.js';
-import type { UpdateMemberInput, UpdateOrgInput } from './schemas.js';
+import type { AddMemberDirectInput, UpdateMemberInput, UpdateOrgInput } from './schemas.js';
 
 const requireMembership = (req: Request) => {
   const m = req.caller?.membership;
@@ -58,4 +58,11 @@ export const removeMemberHandler = async (req: Request, res: Response): Promise<
   const m = requireMembership(req);
   await service.removeMember(m, orgId, userId);
   res.status(204).end();
+};
+
+export const addMemberDirectHandler = async (req: Request, res: Response): Promise<void> => {
+  const orgId = requireOrgIdParam(req);
+  const m = requireMembership(req);
+  const result = await service.addMemberDirect(m, orgId, req.body as AddMemberDirectInput);
+  res.status(201).json(result);
 };

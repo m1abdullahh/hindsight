@@ -307,4 +307,4 @@ A scheduled worker runs daily and:
 2. Hard-deletes screenshot objects from R2 for the same set.
 3. Archives `audit_logs` older than 1 year to cold storage (deferred).
 
-Default screenshot retention is **90 days**, configurable per org later. We never delete `time_entries`; those are the financial record.
+Default screenshot retention is **65 days** (covers any "current + previous month" view with a small buffer), configurable per org later. We never delete `time_entries`; those are the financial record.
