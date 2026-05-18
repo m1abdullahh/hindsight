@@ -279,7 +279,10 @@ function MembersPage() {
 
       {canInvite && (
         <HeaderActionsPortal>
-          <InviteMemberDialog orgId={params.orgId} />
+          <div className="flex items-center gap-2">
+            <AddMemberDirectDialog orgId={params.orgId} />
+            <InviteMemberDialog orgId={params.orgId} />
+          </div>
         </HeaderActionsPortal>
       )}
 
@@ -1074,6 +1077,144 @@ function InviteMemberDialog({ orgId }: { orgId: string }) {
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? <Spinner /> : 'Send invitation'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Min length mirrors the server schema (apps/api/src/modules/orgs/schemas.ts).
+// HIBP runs server-side, so weak passwords surface as 422 — handled in onError.
+const addDirectSchema = z.object({
+  email: z.string().email('Enter a valid email'),
+  name: z.string().trim().min(1, 'Required').max(100),
+  role: z.enum(['admin', 'member']),
+  password: z.string().min(12, 'At least 12 characters').max(128),
+});
+type AddDirectInput = z.infer<typeof addDirectSchema>;
+
+function AddMemberDirectDialog({ orgId }: { orgId: string }) {
+  const [open, setOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const form = useForm<AddDirectInput>({
+    defaultValues: { email: '', name: '', role: 'member', password: '' },
+  });
+
+  const mutation = useMutation({
+    mutationFn: (input: AddDirectInput) =>
+      apiPost<{ user: UserDto; membership: MembershipDto }>(`/orgs/${orgId}/members/direct`, input),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.members(orgId) });
+      toast({
+        title: 'Member added',
+        description: `Share the credentials with ${data.user.email}.`,
+      });
+      setOpen(false);
+      form.reset();
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        // Surface field-specific issues inline so the admin can correct
+        // them without dismissing the dialog.
+        if (err.code === 'conflict') {
+          form.setError('email', { message: err.message });
+          return;
+        }
+        if (err.code === 'invalid_input' && /password/i.test(err.message)) {
+          form.setError('password', { message: err.message });
+          return;
+        }
+      }
+      toast({
+        title: 'Could not add member',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    },
+  });
+
+  const onSubmit = form.handleSubmit((values) => {
+    const parsed = addDirectSchema.safeParse(values);
+    if (!parsed.success) {
+      const issues = parsed.error.flatten().fieldErrors;
+      if (issues.email?.[0]) form.setError('email', { message: issues.email[0] });
+      if (issues.name?.[0]) form.setError('name', { message: issues.name[0] });
+      if (issues.password?.[0]) form.setError('password', { message: issues.password[0] });
+      return;
+    }
+    mutation.mutate(parsed.data);
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" className="h-9 gap-1.5 px-3.5">
+          <Plus className="h-3.5 w-3.5" />
+          Add directly
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add a member directly</DialogTitle>
+          <DialogDescription>
+            Skip the email invite. You set the password and share it with them yourself.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="space-y-4" noValidate>
+          <div className="space-y-2">
+            <Label htmlFor="direct-email">Email</Label>
+            <Input id="direct-email" type="email" autoComplete="off" {...form.register('email')} />
+            {form.formState.errors.email && (
+              <p className="text-xs text-destructive">{form.formState.errors.email.message}</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="direct-name">Full name</Label>
+            <Input id="direct-name" type="text" autoComplete="off" {...form.register('name')} />
+            {form.formState.errors.name && (
+              <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="direct-role">Role</Label>
+            <Select
+              value={form.watch('role')}
+              onValueChange={(v) => form.setValue('role', v as 'admin' | 'member')}
+            >
+              <SelectTrigger id="direct-role">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="member">Member</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="direct-password">Password</Label>
+            <Input
+              id="direct-password"
+              type="text"
+              autoComplete="off"
+              {...form.register('password')}
+            />
+            {form.formState.errors.password && (
+              <p className="text-xs text-destructive">{form.formState.errors.password.message}</p>
+            )}
+            <p className="text-[11px] text-ink4">
+              Visible so you can copy it. Minimum 12 characters; commonly leaked passwords are
+              rejected.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? <Spinner /> : 'Add member'}
             </Button>
           </DialogFooter>
         </form>

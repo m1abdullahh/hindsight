@@ -14,7 +14,7 @@
 
 5. **The user's own data is theirs.** Members can see all of their own screenshots, time entries, and activity metrics. No "manager-only" view of personal data without the member also having access.
 
-6. **Retention is finite.** 90-day default, configurable per org down to 14 days. We don't keep screenshots forever just in case.
+6. **Retention is finite.** 65-day default (covers any "current + previous month" view with a small buffer), configurable per org down to 14 days. We don't keep screenshots forever just in case.
 
 7. **No dark patterns.** No fake pause buttons that don't pause. No "are you sure you want to stop tracking" hesitation prompts. No emails to admins when members pause.
 

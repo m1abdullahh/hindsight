@@ -9,6 +9,7 @@ export type AuditAction =
   | 'member.invited'
   | 'member.invitation_revoked'
   | 'member.joined'
+  | 'member.directly_added'
   | 'member.removed'
   | 'member.role_changed'
   | 'member.status_changed'

@@ -6,13 +6,14 @@ import { orgScope } from '../../middleware/org-scope.js';
 import { validate } from '../../middleware/validate.js';
 
 import {
+  addMemberDirectHandler,
   getOrgHandler,
   listMembersHandler,
   removeMemberHandler,
   updateMemberHandler,
   updateOrgHandler,
 } from './handlers.js';
-import { updateMemberInput, updateOrgInput } from './schemas.js';
+import { addMemberDirectInput, updateMemberInput, updateOrgInput } from './schemas.js';
 
 export const orgsRouter: Router = Router();
 
@@ -27,6 +28,14 @@ orgsRouter.patch(
 );
 
 orgsRouter.get('/orgs/:orgId/members', requireAuth(), orgScope(), asyncHandler(listMembersHandler));
+
+orgsRouter.post(
+  '/orgs/:orgId/members/direct',
+  requireAuth(),
+  orgScope(),
+  validate(addMemberDirectInput, 'body'),
+  asyncHandler(addMemberDirectHandler),
+);
 
 orgsRouter.patch(
   '/orgs/:orgId/members/:userId',
