@@ -10,6 +10,7 @@ mod auth;
 mod capture;
 mod db;
 mod idle_watcher;
+mod lock_watcher;
 mod permissions;
 mod scheduler;
 mod outbox_sweeper;
@@ -233,7 +234,10 @@ pub fn run() {
                 // Idle watcher uses tokio::spawn internally, so it must run
                 // from inside a Tokio runtime context — i.e. after this async
                 // block has started, not from setup() directly.
-                idle_watcher::spawn(app_handle);
+                idle_watcher::spawn(app_handle.clone());
+                // Lock watcher pauses tracking immediately on screen lock so
+                // we don't have to wait for the 5-min idle threshold.
+                lock_watcher::spawn(app_handle);
             });
 
             // 5. Tray icon + menu.

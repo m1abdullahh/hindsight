@@ -8,7 +8,7 @@ const POLL_INTERVAL_MS = 1 * 60 * 60 * 1000;
 
 // Delay the first check after boot so we don't compete with login + initial
 // /auth/me + capture-permission flows for the network and the user's attention.
-const INITIAL_DELAY_MS = 30 * 1000;
+const INITIAL_DELAY_MS = 15 * 1000;
 
 export type UpdaterPhase =
   | { kind: 'idle' }

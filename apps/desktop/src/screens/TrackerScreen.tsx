@@ -226,6 +226,7 @@ function TrackTab({
   const setProject = session((s) => s.setProject);
   const startTracking = session((s) => s.startTracking);
   const stopTracking = session((s) => s.stopTracking);
+  const rotateEntry = session((s) => s.rotateEntry);
   const timeEntryId = session((s) => s.timeEntryId);
   const startedAt = session((s) => s.startedAt);
   const baselineTodaySeconds = session((s) => s.baselineTodaySeconds);
@@ -355,6 +356,89 @@ function TrackTab({
     return () => window.clearInterval(id);
   }, [tracking, timeEntryId, startedAt]);
 
+  // Midnight session split. While tracking, watch the local calendar day.
+  // When it rolls over, finalize the current entry at the boundary and open
+  // a fresh one for the new day — so no time entry ever spans midnight and
+  // each day's report bucket is exact. Without this an overnight session is
+  // attributed entirely to its start day (see reports/service.ts), making
+  // "today" totals on the desktop AND admin web wrong until the user stops.
+  // Runs even while paused so an idle/locked overnight session still rotates.
+  // The displayed timer resets to "since midnight" — the new entry genuinely
+  // starts then.
+  useEffect(() => {
+    if (!tracking) return;
+    let sessionDay = new Date().toDateString();
+    let splitting = false;
+
+    const performSplit = async (): Promise<void> => {
+      const { timeEntryId: oldId, currentProject: proj, pauseReason: reason } = session.getState();
+      if (!oldId || !proj) return;
+      // Snapshot the old entry's totals before any await so they reflect the
+      // split instant, not a value drifting during the round-trips.
+      const finalActive = Math.min(86_400, activeSecRef.current);
+      const finalIdle = computeIdleSecondsRef.current();
+
+      // 1. Persist the old entry's final totals WHILE IT IS STILL OPEN.
+      //    POST /time-entries below auto-closes any open entry on this
+      //    device, and once closed a PATCH that carries endedAt is rejected
+      //    with 409 — so we must flush the totals first, without endedAt.
+      //    If this throws we abort before the POST, so tracking simply
+      //    keeps running on the old entry and the next tick retries.
+      await apiPatch(
+        `/time-entries/${oldId}`,
+        { totalActiveSeconds: finalActive, totalIdleSeconds: finalIdle },
+        crypto.randomUUID(),
+      );
+
+      // 2. Create the new day's entry. The server auto-stops the still-open
+      //    old entry (sets its endedAt) as part of this call, so one POST
+      //    both closes yesterday's entry and opens today's.
+      const fresh = await apiPost<TimeEntryResponse>(
+        '/time-entries',
+        { projectId: proj.id, startedAt: new Date().toISOString() },
+        crypto.randomUUID(),
+      );
+
+      // If the user stopped tracking during the round-trips, abort: don't
+      // re-point the scheduler or rotate. The fresh entry stays a harmless
+      // zero-second row.
+      const live = session.getState();
+      if (live.stage !== 'tracking' || live.timeEntryId !== oldId) return;
+
+      // 3. Point the native capture scheduler at the new entry.
+      void invoke('set_tracking', {
+        tracking: {
+          time_entry_id: fresh.id,
+          interval_minutes: proj.screenshotIntervalMinutes,
+          paused: reason !== null,
+        },
+      });
+
+      // 4. Reset local accumulators for the fresh entry, then rotate the store.
+      idleSecondsRef.current = 0;
+      lastIdleAccrualAtRef.current = reason === 'idle' ? Date.now() : null;
+      rotateEntry(fresh.id, fresh.startedAt);
+      console.log('[split] midnight split done — old=', oldId, 'new=', fresh.id);
+    };
+
+    const id = window.setInterval(() => {
+      const today = new Date().toDateString();
+      if (today === sessionDay || splitting) return;
+      splitting = true;
+      const prevDay = sessionDay;
+      sessionDay = today; // advance up-front so a slow split doesn't re-fire
+      void performSplit()
+        .catch((err) => {
+          console.warn('[split] midnight split failed; will retry next tick', err);
+          sessionDay = prevDay; // allow the next tick to retry
+        })
+        .finally(() => {
+          splitting = false;
+        });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [tracking, rotateEntry]);
+
   // Per-project idle threshold (falls back to default when no project loaded).
   const idleThresholdSec = currentProject
     ? Math.max(60, currentProject.idleTimeoutMinutes * 60)
@@ -426,6 +510,51 @@ function TrackTab({
       void unlistenPromise.then((u) => u());
     };
   }, [tracking, idleThresholdSec, pauseSession, resumeSession]);
+
+  // OS lock detection — Win+L, Ctrl+Cmd+Q (macOS), screensaver activation on
+  // Linux. Reacts faster than idle (no 5-min threshold) because a locked
+  // screen is unambiguous — the user is away from the machine, not just AFK.
+  // Unlike the idle path, locked time is NOT accrued into totalIdleSeconds
+  // (the idle accumulator only runs when `pauseReason === 'idle'`), so a
+  // locked period appears as a clean gap in the session record.
+  useEffect(() => {
+    if (!tracking) return;
+    const unlistenPromise = listen<{ locked: boolean }>('lock-state-changed', (e) => {
+      const locked = e.payload.locked;
+      const { pauseReason: reason, timeEntryId: teId, currentProject: proj } = session.getState();
+
+      console.log('[lock] event locked=', locked, 'currentReason=', reason);
+      if (locked && reason === null) {
+        // Pause from active. If the user was already manually paused we
+        // leave that alone — escalating to 'locked' would lose the manual
+        // intent on unlock.
+        pauseSession('locked');
+        if (teId && proj) {
+          void invoke('set_tracking', {
+            tracking: {
+              time_entry_id: teId,
+              interval_minutes: proj.screenshotIntervalMinutes,
+              paused: true,
+            },
+          });
+        }
+      } else if (!locked && reason === 'locked') {
+        resumeSession();
+        if (teId && proj) {
+          void invoke('set_tracking', {
+            tracking: {
+              time_entry_id: teId,
+              interval_minutes: proj.screenshotIntervalMinutes,
+              paused: false,
+            },
+          });
+        }
+      }
+    });
+    return () => {
+      void unlistenPromise.then((u) => u());
+    };
+  }, [tracking, pauseSession, resumeSession]);
 
   // Today's totals across all projects
   const todayQuery = useTodayTotalsForOrg(currentOrgId);
