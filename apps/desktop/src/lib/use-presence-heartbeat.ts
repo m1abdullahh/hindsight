@@ -2,19 +2,19 @@ import type { PresenceState } from '@hindsight/shared/dto';
 import { useEffect, useRef } from 'react';
 
 import { apiPost } from './api';
-import { session } from './session-store';
+import { session, type PauseReason } from './session-store';
 
 declare const __APP_VERSION__: string;
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 
 // Map session state → presence state. Tracking & not paused = active; tracking
-// & paused (manual or idle) = idle; everything else = offline. The web reads
-// the state with a 35s staleness window, so sending 'offline' explicitly is
-// what makes Stop flip the badge within one heartbeat instead of three.
+// & paused (manual, idle, or locked) = idle; everything else = offline. The web
+// reads the state with a 35s staleness window, so sending 'offline' explicitly
+// is what makes Stop flip the badge within one heartbeat instead of three.
 const stateFromSession = (
   stage: 'login' | 'picking' | 'tracking',
-  pauseReason: 'manual' | 'idle' | null,
+  pauseReason: PauseReason | null,
 ): PresenceState => {
   if (stage !== 'tracking') return 'offline';
   return pauseReason ? 'idle' : 'active';

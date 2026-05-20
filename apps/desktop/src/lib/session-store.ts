@@ -3,7 +3,7 @@ import { create } from 'zustand';
 
 export type Stage = 'login' | 'picking' | 'tracking';
 
-export type PauseReason = 'manual' | 'idle';
+export type PauseReason = 'manual' | 'idle' | 'locked';
 
 export interface DesktopSession {
   stage: Stage;
@@ -35,6 +35,9 @@ export interface DesktopSession {
   setProject: (project: ProjectDto) => void;
   startTracking: (timeEntryId: string, startedAt: string, baselineTodaySeconds: number) => void;
   stopTracking: () => void;
+  // Swap the live time entry for a fresh one without ending the session —
+  // used by the midnight split so no entry ever spans a calendar day.
+  rotateEntry: (timeEntryId: string, startedAt: string) => void;
   setPendingUploads: (count: number) => void;
   pause: (reason: PauseReason) => void;
   resume: () => void;
@@ -85,6 +88,18 @@ export const session = create<DesktopSession>((set) => ({
       pauseStartedAt: null,
       accumulatedPausedMs: 0,
     }),
+  rotateEntry: (timeEntryId, startedAt) =>
+    set((s) => ({
+      timeEntryId,
+      startedAt,
+      // The new entry is for a brand-new calendar day, so nothing has been
+      // tracked on it yet — baseline and prior paused time both reset.
+      baselineTodaySeconds: 0,
+      accumulatedPausedMs: 0,
+      // If a pause is ongoing across the split, restart its clock against the
+      // new entry so currentPauseMs counts only time paused within this entry.
+      pauseStartedAt: s.pauseReason ? Date.now() : null,
+    })),
   setPendingUploads: (count) => set({ pendingUploads: count }),
   pause: (reason) =>
     set((s) => (s.pauseReason ? s : { pauseReason: reason, pauseStartedAt: Date.now() })),
