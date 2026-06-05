@@ -1,12 +1,14 @@
 # Hindsight
 
+[![Desktop release](https://github.com/m1abdullahh/hindsight/actions/workflows/desktop-release.yml/badge.svg?branch=main&event=workflow_dispatch)](https://github.com/m1abdullahh/hindsight/actions/workflows/desktop-release.yml)
+
 Internal screenshot-based time tracking for small teams. Members install a desktop app, pick a project, and start a timer. While tracking, the app captures periodic screenshots and aggregate activity metrics, then uploads them to a server. Managers and members both view their data through the same web app, scoped by role.
 
-> **Status:** All three apps in active development.
+> **Status:** All three apps shipped through the desktop MVP; iterating on polish.
 >
-> - **API** (Plans 00–05, 09): auth + orgs + members + invitations + projects + assignments + screenshot ingestion + reports. Tests passing against Neon.
+> - **API** (Plans 00–05, 09): auth + orgs + members + invitations + projects + assignments + screenshot ingestion + reports. Direct member add, session revocation (revoking logs the device out), and reduced screenshot retention. Tests passing against Neon.
 > - **Web** (Plans 06, 07, plus reports + screenshots gallery): admin and member portals — orgs, members, projects, screenshot gallery per project, time-totals reports (per-project + org-wide).
-> - **Desktop** (Plan 08, plus notifications + baseline timer): Tauri 2 tracker — login, picker, capture loop, outbox uploader, OS toasts on capture, "My time" panel, today-aware tracker timer. Windows installer signs + branded toasts via AUMID registration.
+> - **Desktop** (Plans 08, 10): Tauri 2 tracker — login, picker, capture loop, outbox uploader, OS toasts on capture, "My time" panel, today-aware tracker timer. Pauses tracking on idle and on screen lock (with an in-app notice), splits sessions at midnight, and ships signed auto-updates via GitHub Releases. Windows installer signs + branded toasts via AUMID registration.
 >
 > Architecture and product decisions live in [`/docs`](./docs); concrete execution plans in [`/plans`](./plans).
 
@@ -19,7 +21,7 @@ hindsight/
 ├── apps/
 │   ├── api/         # Express + TypeScript backend (REST, workers, presigning)
 │   ├── web/         # React + Vite SPA — admin and member portals
-│   └── desktop/     # Tauri 2 app (Win/Mac) — screenshot capture, outbox
+│   └── desktop/     # Tauri 2 app (Win/Mac/Linux) — screenshot capture, outbox, auto-update
 ├── packages/
 │   └── shared/      # Zod schemas, TS types, capability matrix shared across apps
 ├── docs/            # Source of truth for product + architecture decisions
@@ -45,6 +47,7 @@ Quick links:
 - [Privacy & ethics](./docs/09-privacy-and-ethics.md) — what we will and won't capture
 - [Roadmap](./docs/10-roadmap.md) — milestones
 - [Glossary](./docs/11-glossary.md) — terms
+- [Desktop updater](./docs/12-desktop-updater.md) — signed auto-update flow + release process
 
 ## Tech at a glance
 
@@ -64,7 +67,7 @@ Full rationale in [`docs/03-tech-stack.md`](./docs/03-tech-stack.md).
 - pnpm 9+
 - A Neon project (Postgres) — https://console.neon.tech
 - An Upstash Redis database — https://console.upstash.com
-- Rust toolchain (only when the desktop plan lands)
+- Rust toolchain (stable) — required to build or run the desktop app
 
 **Bootstrap:**
 
@@ -101,12 +104,18 @@ pnpm --filter @hindsight/web dev          # Vite dev server, port 5173
 pnpm --filter @hindsight/desktop tauri:dev # Tauri shell + Vite for the desktop UI
 ```
 
-To produce a Windows installer:
+To produce a local installer (NSIS on Windows, `.dmg`/`.app` on macOS):
 
 ```bash
 pnpm --filter @hindsight/desktop tauri:build
-# → apps/desktop/src-tauri/target/release/bundle/nsis/Hindsight_0.1.0_x64-setup.exe
+# Windows → apps/desktop/src-tauri/target/release/bundle/nsis/Hindsight_0.2.4_x64-setup.exe
+# macOS   → apps/desktop/src-tauri/target/release/bundle/dmg/Hindsight_0.2.4_*.dmg
 ```
+
+Signed, multi-platform release builds are produced by the [`desktop-release`](./.github/workflows/desktop-release.yml)
+GitHub Actions workflow (manual `workflow_dispatch`), which drafts a GitHub
+Release and publishes the `latest.json` consumed by the in-app auto-updater.
+See [`docs/12-desktop-updater.md`](./docs/12-desktop-updater.md).
 
 ## Environment variables
 
@@ -164,7 +173,7 @@ Treat the docs as part of the source code, because they are.
 
 Production runs the API + worker on a serverless host (Railway/Fly.io/Render — TBD), with Postgres on **Neon** and Redis on **Upstash**. Cloudflare handles DNS and TLS for the API hostname. R2 handles screenshot storage. Backups: Neon's point-in-time recovery on the paid tier, plus a periodic `pg_dump` to R2 for cold archive.
 
-CI deploys `main` on green. See `.github/workflows/deploy.yml` once it lands.
+The desktop app is released via [`.github/workflows/desktop-release.yml`](./.github/workflows/desktop-release.yml) — a manually triggered (`workflow_dispatch`) build that signs and bundles the macOS/Windows/Linux artifacts, drafts a GitHub Release, and uploads the `latest.json` used by the auto-updater. An API/web deploy workflow is still TBD.
 
 ## License
 
