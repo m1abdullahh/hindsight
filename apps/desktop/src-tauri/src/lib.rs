@@ -151,6 +151,19 @@ fn format_idle_duration(seconds: u64) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // webkit2gtk 2.42+ (Ubuntu 24.04, 26.04, and other modern distros) enables
+    // DMABUF rendering by default, which segfaults on a wide range of GPU /
+    // driver / VM combinations — the app crashes on launch or the moment the
+    // webview paints. Forcing the older, universally-stable renderer avoids it.
+    // Must be set before the webview is created (i.e. before Builder::run), and
+    // we only set it when the user hasn't already chosen a value so a power user
+    // can still opt back in. Safe to call here: run() is single-threaded at this
+    // point, before any worker threads spawn.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

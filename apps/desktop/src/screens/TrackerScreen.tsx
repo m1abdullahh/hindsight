@@ -33,6 +33,13 @@ declare const __APP_VERSION__: string;
 // Fallback threshold when no project is loaded (e.g. between sessions).
 const DEFAULT_IDLE_THRESHOLD_SECONDS = 300;
 
+// Members may delete only their OWN captures, and only within this window of
+// capture; after it passes, removal is owner/admin-only. This is a UX guard so
+// we don't offer a Delete button the API will reject — the API is the real
+// enforcer. MUST mirror MEMBER_DELETE_GRACE_MS in
+// apps/api/src/modules/screenshots/service.ts; keep the two in sync.
+const MEMBER_DELETE_GRACE_MS = 5 * 60 * 1000;
+
 // Silent error swallow for fire-and-forget API calls (periodic flush, etc.).
 // Lifting this to a module constant satisfies no-empty-function without
 // pretending the error is handled.
@@ -1237,13 +1244,21 @@ function ScreenshotPreview({
     return () => window.removeEventListener('keydown', handler);
   }, [onClose, deleting]);
 
-  // Owner/admin can delete any capture; members can delete only their own.
-  const canDelete = (() => {
-    if (!detail || !callerUserId) return false;
+  // Owner/admin can delete any capture; members can delete only their own, and
+  // only within MEMBER_DELETE_GRACE_MS of capture. We split the member case so
+  // the UI can explain "your own, but the window has passed" instead of either
+  // hiding the control silently or offering a Delete the API will 403.
+  //   'allowed' → show the Delete button
+  //   'expired' → own capture past the grace window: explain, no button
+  //   'none'    → not deletable by this user: show nothing
+  const deletePermission: 'allowed' | 'expired' | 'none' = (() => {
+    if (!detail || !callerUserId) return 'none';
     const mem = memberships.find((m) => m.orgId === detail.orgId);
-    if (!mem) return false;
-    if (mem.role === 'owner' || mem.role === 'admin') return true;
-    return callerUserId === detail.ownerUserId;
+    if (!mem) return 'none';
+    if (mem.role === 'owner' || mem.role === 'admin') return 'allowed';
+    if (callerUserId !== detail.ownerUserId) return 'none';
+    const ageMs = Date.now() - new Date(detail.screenshot.capturedAt).getTime();
+    return ageMs <= MEMBER_DELETE_GRACE_MS ? 'allowed' : 'expired';
   })();
 
   const handleDelete = async (): Promise<void> => {
@@ -1303,7 +1318,7 @@ function ScreenshotPreview({
             <Spinner className="h-5 w-5 text-ink3" />
           )}
         </div>
-        {canDelete && (
+        {deletePermission === 'allowed' && (
           <div className="flex justify-end border-t border-border px-3 py-2">
             <Button
               variant="destructive"
@@ -1315,6 +1330,12 @@ function ScreenshotPreview({
               {deleting ? <Spinner className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
               {deleting ? 'Deleting…' : 'Delete'}
             </Button>
+          </div>
+        )}
+        {deletePermission === 'expired' && (
+          <div className="border-t border-border px-3 py-2 text-[11.5px] text-ink3">
+            Screenshots can only be deleted within 5 minutes of capture. Ask an admin to remove
+            older ones.
           </div>
         )}
       </div>

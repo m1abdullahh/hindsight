@@ -102,7 +102,7 @@ pub fn spawn(
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 Err(e) => {
-                    // Treat 401/403 from the API as a server-side
+                    // Treat a 401 from the API as a server-side
                     // revocation: clear the local token so the next loop
                     // iteration short-circuits on NoToken instead of
                     // burning retries against a dead credential, and tell
@@ -128,12 +128,13 @@ pub fn spawn(
 
 // Auth failures originate at the API only (presign/confirm), not at the R2
 // PUT step — R2 uses the presigned URL's own signature and doesn't see our
-// bearer token. A 401/403 here means the token is dead from the server's
+// bearer token. Only a 401 means the token is dead from the server's
 // perspective (admin revoked, user signed out elsewhere, password reset
-// nuked it). Retrying with the same token is pointless until the user
-// signs in again.
+// nuked it) — the API returns 401 for every such case. A 403 is an
+// authorization decision on a still-valid token, which re-auth wouldn't
+// fix, so it must not clear the token or force a sign-in.
 fn is_auth_failure(err: &UploadError) -> bool {
-    matches!(err, UploadError::Api { status: 401 | 403, .. })
+    matches!(err, UploadError::Api { status: 401, .. })
 }
 
 #[derive(sqlx::FromRow)]
@@ -323,12 +324,14 @@ mod tests {
     }
 
     #[test]
-    fn auth_failure_detects_api_401_and_403() {
+    fn auth_failure_detects_api_401_only() {
         assert!(is_auth_failure(&UploadError::Api {
             status: 401,
             body: String::new()
         }));
-        assert!(is_auth_failure(&UploadError::Api {
+        // 403 is an authorization decision on a valid token, not a dead
+        // session — re-auth wouldn't fix it, so don't treat it as one.
+        assert!(!is_auth_failure(&UploadError::Api {
             status: 403,
             body: String::new()
         }));
