@@ -54,17 +54,25 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 
   if (!res.ok) {
     // Centralized auth-failure handling. The uploader emits reauth-required
-    // when an upload sees a 401/403, but it only runs when there's work in
+    // when an upload sees a dead token, but it only runs when there's work in
     // the outbox — an idle desktop with a revoked token would otherwise
     // sit silent until the user manually tried to do something. Every other
     // authenticated path (presence heartbeat, manual fetch, start-tracking)
     // funnels through this function, so doing it here covers them all.
     //
+    // Only 401 means the session itself is dead (invalid/revoked/expired
+    // token, revoked device, deleted user — see the API's bearer-auth +
+    // verifyAndSlide, which return 401 for every such case). A 403 is an
+    // *authorization* decision on a perfectly valid session — e.g. a member
+    // deleting a capture they're not allowed to ("cannot delete this
+    // screenshot"), or acting outside their org. Treating 403 as a dead
+    // session signed the user out on every such denial; it must not.
+    //
     // Suppressed during boot: the /auth/me validation request runs while
     // stage is still 'login', and a 401 there is the "stale token at
     // startup" case App.tsx already handles cleanly. Firing the toast
     // then would tell a logged-out user their session was revoked.
-    if ((res.status === 401 || res.status === 403) && token) {
+    if (res.status === 401 && token) {
       cachedToken = null;
       if (session.getState().stage !== 'login') {
         void emit('reauth-required', { reason: `api ${res.status}` });
