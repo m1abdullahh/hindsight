@@ -23,8 +23,12 @@ tauri-plugin-process = "2"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 
-# Capture + image encoding
-screenshots = "0.8"
+# Capture + image encoding. xcap is the maintained successor to the abandoned
+# `screenshots` crate; unlike `screenshots` 0.8 (X11/wlr-screencopy only, which
+# crashes natively on GNOME/KDE Wayland) it captures through the XDG desktop
+# portal + PipeWire, so it works on modern Linux desktops. It returns the same
+# `image` 0.25 RgbaImage we encode with, so no cross-version shim is needed.
+xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 # Local outbox + upload

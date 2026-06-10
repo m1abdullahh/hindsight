@@ -1,12 +1,8 @@
 use std::time::SystemTime;
 
-use image::{codecs::jpeg::JpegEncoder, ColorType};
-// Use the RgbaImage from screenshots' re-export so the type matches what
-// `screen.capture()` returns — our direct `image` dep is a different major
-// version than screenshots' internal one.
-use screenshots::image::RgbaImage;
-use screenshots::Screen;
+use image::{codecs::jpeg::JpegEncoder, ColorType, Rgba, RgbaImage};
 use serde::Serialize;
+use xcap::Monitor;
 
 #[derive(Serialize, Clone)]
 pub struct CapturedScreenshot {
@@ -80,15 +76,15 @@ fn now_ms() -> i64 {
 /// monitor was captured we proceed with what we have. If every monitor fails
 /// the function errors.
 pub fn capture_all() -> Result<Vec<CapturedScreenshot>, CaptureError> {
-    let screens = Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
-    if screens.is_empty() {
+    let monitors = Monitor::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
+    if monitors.is_empty() {
         return Err(CaptureError::NoDisplays);
     }
 
     let captured_at_ms = now_ms();
-    let mut images: Vec<RgbaImage> = Vec::with_capacity(screens.len());
-    for (idx, screen) in screens.iter().enumerate() {
-        match screen.capture() {
+    let mut images: Vec<RgbaImage> = Vec::with_capacity(monitors.len());
+    for (idx, monitor) in monitors.iter().enumerate() {
+        match monitor.capture_image() {
             Ok(img) => images.push(img),
             Err(e) => {
                 tracing::warn!(monitor = idx, err = %e, "monitor capture failed; skipping");
@@ -125,11 +121,7 @@ fn stitch_horizontally(images: &[RgbaImage]) -> RgbaImage {
     // Start with an opaque black canvas so missing strips read as black bars
     // rather than transparent (JPEG drops alpha anyway, so transparent would
     // become white).
-    let mut canvas = RgbaImage::from_pixel(
-        total_width,
-        max_height,
-        screenshots::image::Rgba([0, 0, 0, 255]),
-    );
+    let mut canvas = RgbaImage::from_pixel(total_width, max_height, Rgba([0, 0, 0, 255]));
 
     let mut x_offset: u32 = 0;
     for img in images {

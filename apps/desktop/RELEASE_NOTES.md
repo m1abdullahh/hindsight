@@ -16,3 +16,4 @@
 - Deleting a screenshot you weren't allowed to remove (for example an older capture, from the **Me** tab) no longer signs you out. You now just get a "couldn't delete" message and stay logged in.
 - The **Me** tab no longer shows a Delete button on your own older screenshots that can't actually be removed. Since you can only delete your own captures within 5 minutes of taking them, older ones now show a short note explaining that an admin has to remove them — instead of a button that fails.
 - Fixed a crash on launch on newer Linux versions (Ubuntu 24.04 and later, including 26.04). The app now starts reliably on these systems.
+- Fixed a Linux crash when a screenshot was taken on modern desktops (GNOME/KDE on Wayland). Captures now go through the standard system screen-sharing path, so tracking works instead of crashing the app.
