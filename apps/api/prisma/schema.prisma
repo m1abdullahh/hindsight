@@ -201,9 +201,7 @@ model TimeEntry {
   id                 String    @id
   userId             String    @map("user_id")
   projectId          String    @map("project_id")
-  // Null for manually-entered time: an admin adding hours on a member's behalf
-  // isn't tied to any device. Device-tracked entries always carry a deviceId.
-  deviceId           String?   @map("device_id")
+  deviceId           String    @map("device_id")
   startedAt          DateTime  @map("started_at")
   endedAt            DateTime? @map("ended_at")
   totalActiveSeconds Int       @default(0) @map("total_active_seconds")
@@ -212,7 +210,7 @@ model TimeEntry {
 
   user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  device      Device?      @relation(fields: [deviceId], references: [id])
+  device      Device       @relation(fields: [deviceId], references: [id])
   screenshots Screenshot[]
 
   @@index([userId, startedAt])
