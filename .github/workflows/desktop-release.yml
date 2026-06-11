@@ -63,7 +63,9 @@ jobs:
             libdbus-1-dev \
             libpipewire-0.3-dev \
             libwayland-dev \
-            libegl-dev
+            libegl-dev \
+            libgbm-dev \
+            libdrm-dev
 
       - uses: pnpm/action-setup@v4
 
