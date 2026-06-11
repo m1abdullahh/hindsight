@@ -292,4 +292,88 @@ describe.skipIf(!process.env['CI'] && !(await isDbReachable()))('time entries', 
     expect(meta.changes.totalActiveSeconds.from).toBe(100);
     expect(meta.changes.totalActiveSeconds.to).toBe(9999);
   });
+
+  // ── Manual time entry (admin adds time for a member) ──────────────────
+
+  const seedMember = async (orgId: string, id = 'u-mem', email = 'mem@example.com') => {
+    const user = await prisma.user.create({
+      data: { id, email, name: 'mem', passwordHash: 'p' },
+    });
+    await prisma.membership.create({
+      data: { id: `m-${id}`, orgId, userId: user.id, role: 'member' },
+    });
+    const webToken = (await mintToken({ userId: user.id, kind: 'web' })).plaintext;
+    return { userId: user.id, webToken };
+  };
+
+  const today = (): string => new Date().toISOString().slice(0, 10);
+
+  it('admin adds manual time for a member: 201, counts as active, deviceId null, audited', async () => {
+    const owner = await setupOrg();
+    const member = await seedMember(owner.orgId);
+    const app = makeTestApp();
+
+    const res = await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/members/${member.userId}/time-entries`)
+      .set('Authorization', `Bearer ${owner.webToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ projectId: owner.projectId, date: today(), durationSeconds: 3600, notes: 'forgot' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.userId).toBe(member.userId);
+    expect(res.body.totalActiveSeconds).toBe(3600);
+    expect(res.body.totalIdleSeconds).toBe(0);
+    expect(res.body.deviceId).toBeNull();
+    expect(res.body.endedAt).not.toBeNull();
+
+    const audits = await prisma.auditLog.findMany({
+      where: { action: 'time_entry.created_by_admin', targetId: res.body.id },
+    });
+    expect(audits).toHaveLength(1);
+    expect((audits[0]!.metadata as { targetUserId: string }).targetUserId).toBe(member.userId);
+  });
+
+  it('member cannot add manual time (403)', async () => {
+    const owner = await setupOrg();
+    const member = await seedMember(owner.orgId);
+    const app = makeTestApp();
+
+    const res = await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/members/${member.userId}/time-entries`)
+      .set('Authorization', `Bearer ${member.webToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ projectId: owner.projectId, date: today(), durationSeconds: 3600 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('manual time with a future date returns 422', async () => {
+    const owner = await setupOrg();
+    const member = await seedMember(owner.orgId);
+    const app = makeTestApp();
+
+    const future = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const res = await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/members/${member.userId}/time-entries`)
+      .set('Authorization', `Bearer ${owner.webToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ projectId: owner.projectId, date: future, durationSeconds: 3600 });
+
+    expect(res.status).toBe(422);
+  });
+
+  it('manual time into a project from another org returns 403', async () => {
+    const owner = await setupOrg('owner1@example.com');
+    const other = await setupOrg('owner2@example.com');
+    const member = await seedMember(owner.orgId);
+    const app = makeTestApp();
+
+    const res = await request(app)
+      .post(`/api/v1/orgs/${owner.orgId}/members/${member.userId}/time-entries`)
+      .set('Authorization', `Bearer ${owner.webToken}`)
+      .set('Idempotency-Key', randomUUID())
+      .send({ projectId: other.projectId, date: today(), durationSeconds: 3600 });
+
+    expect(res.status).toBe(403);
+  });
 });

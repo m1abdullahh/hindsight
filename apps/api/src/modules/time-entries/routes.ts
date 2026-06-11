@@ -7,11 +7,17 @@ import { orgScope } from '../../middleware/org-scope.js';
 import { validate } from '../../middleware/validate.js';
 
 import {
+  createManualTimeEntryHandler,
   createTimeEntryHandler,
   listTimeEntriesHandler,
   updateTimeEntryHandler,
 } from './handlers.js';
-import { createTimeEntryInput, listTimeEntriesQuery, updateTimeEntryInput } from './schemas.js';
+import {
+  createManualTimeEntryInput,
+  createTimeEntryInput,
+  listTimeEntriesQuery,
+  updateTimeEntryInput,
+} from './schemas.js';
 
 export const timeEntriesRouter: Router = Router();
 
@@ -29,6 +35,15 @@ timeEntriesRouter.patch(
   idempotency(),
   validate(updateTimeEntryInput, 'body'),
   asyncHandler(updateTimeEntryHandler),
+);
+
+timeEntriesRouter.post(
+  '/orgs/:orgId/members/:userId/time-entries',
+  requireAuth(),
+  orgScope(),
+  idempotency(),
+  validate(createManualTimeEntryInput, 'body'),
+  asyncHandler(createManualTimeEntryHandler),
 );
 
 timeEntriesRouter.get(

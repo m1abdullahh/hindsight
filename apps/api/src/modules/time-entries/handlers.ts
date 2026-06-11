@@ -1,10 +1,12 @@
 import type { Request, Response } from 'express';
 
+import { can } from '../../auth/capabilities.js';
 import { AppError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 
 import * as service from './service.js';
 import type {
+  CreateManualTimeEntryInput,
   CreateTimeEntryInput,
   ListTimeEntriesQuery,
   UpdateTimeEntryInput,
@@ -24,6 +26,29 @@ export const createTimeEntryHandler = async (req: Request, res: Response): Promi
   const dto = await service.startTimeEntry(
     { userId: caller.user.id, deviceId: caller.device.id },
     req.body as CreateTimeEntryInput,
+  );
+  res.status(201).json(dto);
+};
+
+// POST /orgs/:orgId/members/:userId/time-entries — admin/owner manually adds
+// time on a member's behalf. orgScope has already resolved the caller's
+// membership for :orgId; we gate on the create_manual capability here.
+export const createManualTimeEntryHandler = async (req: Request, res: Response): Promise<void> => {
+  const caller = requireCaller(req);
+  const orgId = req.params['orgId'];
+  const userId = req.params['userId'];
+  if (!orgId) throw new AppError('invalid_input', 400, 'missing orgId in path');
+  if (!userId) throw new AppError('invalid_input', 400, 'missing userId in path');
+
+  const m = caller.membership;
+  if (!m || !can(m, { type: 'time_entries:create_manual' })) {
+    throw new AppError('forbidden', 403, 'only an admin can add time for a member');
+  }
+
+  const dto = await service.createManualTimeEntry(
+    { userId: caller.user.id, orgId },
+    userId,
+    req.body as CreateManualTimeEntryInput,
   );
   res.status(201).json(dto);
 };

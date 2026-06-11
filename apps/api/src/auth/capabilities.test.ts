@@ -64,6 +64,11 @@ const cases: MatrixCase[] = [
   { role: 'admin', action: { type: 'time_entries:read_all' }, expected: true },
   { role: 'member', action: { type: 'time_entries:read_all' }, expected: false },
 
+  // time_entries:create_manual — owner + admin (members can't add time)
+  { role: 'owner', action: { type: 'time_entries:create_manual' }, expected: true },
+  { role: 'admin', action: { type: 'time_entries:create_manual' }, expected: true },
+  { role: 'member', action: { type: 'time_entries:create_manual' }, expected: false },
+
   // audit:read — owner + admin
   { role: 'owner', action: { type: 'audit:read' }, expected: true },
   { role: 'admin', action: { type: 'audit:read' }, expected: true },
