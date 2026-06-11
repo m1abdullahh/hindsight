@@ -28,7 +28,16 @@ tauri-plugin-updater = "2"
 # crashes natively on GNOME/KDE Wayland) it captures through the XDG desktop
 # portal + PipeWire, so it works on modern Linux desktops. It returns the same
 # `image` 0.25 RgbaImage we encode with, so no cross-version shim is needed.
-xcap = "0.9"
+#
+# Pinned to EXACTLY 0.8.0: later xcap (0.8.3, 0.9.x) pull pipewire-rs 0.9 →
+# libspa 0.9.2, whose bindings need the `spa_video_info_raw.flags` field added
+# only in PipeWire 1.4 — which no GitHub-hosted runner ships yet (ubuntu-24.04
+# is on PipeWire 1.0), so those fail to compile in CI. xcap 0.8.0 uses
+# pipewire-rs 0.8 / libspa 0.8, which build against the runner's system
+# PipeWire. SPA's pod wire format is version-stable, so the resulting bundle
+# still captures on PipeWire 1.4 (Ubuntu 26.04). Bump only once a runner (or a
+# vendored install) provides PipeWire >= 1.4.
+xcap = "=0.8.0"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 # Local outbox + upload
