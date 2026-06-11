@@ -8,6 +8,7 @@ import { prisma } from '../../lib/prisma.js';
 import { toTimeEntryDto, type TimeEntryDto } from '../../lib/dto.js';
 
 import type {
+  CreateManualTimeEntryInput,
   CreateTimeEntryInput,
   ListTimeEntriesQuery,
   UpdateTimeEntryInput,
@@ -64,6 +65,83 @@ export const startTimeEntry = async (
   });
 
   return toTimeEntryDto(result);
+};
+
+interface AdminCaller {
+  userId: string;
+  orgId: string;
+}
+
+/**
+ * Admin/owner manually records time on a member's behalf (e.g. the member
+ * forgot to track). The entry has no device, counts as active/billable time
+ * (its `totalActiveSeconds` rolls up into reports exactly like tracked time),
+ * and is always audited so a retroactive add is traceable.
+ *
+ * The caller is assumed to already be an owner/admin of `caller.orgId` (the
+ * handler enforces this via `can(..., time_entries:create_manual)`).
+ */
+export const createManualTimeEntry = async (
+  caller: AdminCaller,
+  targetUserId: string,
+  input: CreateManualTimeEntryInput,
+): Promise<TimeEntryDto> => {
+  const project = await prisma.project.findUnique({ where: { id: input.projectId } });
+  if (!project || project.archivedAt) {
+    throw new AppError('not_found', 404, 'project not found or archived');
+  }
+  // Project must belong to the caller's org so an admin can't write time into
+  // another org by guessing a project id.
+  if (project.orgId !== caller.orgId) {
+    throw new AppError('forbidden', 403, 'project is not in this org');
+  }
+
+  // The member must be an active member of this org.
+  const membership = await prisma.membership.findUnique({
+    where: { orgId_userId: { orgId: caller.orgId, userId: targetUserId } },
+  });
+  if (!membership || membership.status !== 'active') {
+    throw new AppError('not_found', 404, 'member not found in this org');
+  }
+
+  // Anchor the calendar day to noon UTC so it stays on the intended day in
+  // every timezone, then derive the close from the duration.
+  const startedAt = new Date(`${input.date}T12:00:00.000Z`);
+  const endedAt = new Date(startedAt.getTime() + input.durationSeconds * 1000);
+
+  const created = await prisma.$transaction(async (tx) => {
+    const entry = await tx.timeEntry.create({
+      data: {
+        id: ulid(),
+        userId: targetUserId,
+        projectId: project.id,
+        deviceId: null,
+        startedAt,
+        endedAt,
+        totalActiveSeconds: input.durationSeconds,
+        totalIdleSeconds: 0,
+        ...(input.notes ? { notes: input.notes } : {}),
+      },
+    });
+
+    await writeAudit(tx, {
+      orgId: caller.orgId,
+      actorId: caller.userId,
+      action: 'time_entry.created_by_admin',
+      targetType: 'time_entry',
+      targetId: entry.id,
+      metadata: {
+        targetUserId,
+        projectId: project.id,
+        date: input.date,
+        durationSeconds: input.durationSeconds,
+      } satisfies Prisma.JsonObject,
+    });
+
+    return entry;
+  });
+
+  return toTimeEntryDto(created);
 };
 
 export const updateTimeEntry = async (

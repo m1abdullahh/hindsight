@@ -25,6 +25,7 @@ export type AuditAction =
   | 'device.revoked'
   | 'screenshot.deleted'
   | 'time_entry.updated_by_admin'
+  | 'time_entry.created_by_admin'
   | 'auth.signup'
   | 'auth.login'
   | 'auth.logout'

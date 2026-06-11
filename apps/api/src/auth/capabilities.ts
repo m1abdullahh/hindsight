@@ -14,6 +14,7 @@ export type Action =
   | { type: 'projects:assign_members' }
   | { type: 'projects:read'; assignedToCaller: boolean }
   | { type: 'time_entries:read_all' }
+  | { type: 'time_entries:create_manual' }
   | { type: 'screenshots:read'; ownerUserId: string }
   | { type: 'screenshots:delete'; ownerUserId: string; withinGrace: boolean }
   | { type: 'audit:read' }
@@ -34,6 +35,7 @@ export const can = (m: Membership, action: Action): boolean => {
     case 'projects:edit':
     case 'projects:assign_members':
     case 'time_entries:read_all':
+    case 'time_entries:create_manual':
     case 'audit:read':
       return m.role === 'owner' || m.role === 'admin';
 

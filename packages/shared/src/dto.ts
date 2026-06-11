@@ -90,7 +90,8 @@ export interface TimeEntryDto {
   id: string;
   userId: string;
   projectId: string;
-  deviceId: string;
+  // Null for manually-added entries (admin entered the time; no device).
+  deviceId: string | null;
   startedAt: string;
   endedAt: string | null;
   totalActiveSeconds: number;
