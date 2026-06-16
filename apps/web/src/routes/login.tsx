@@ -131,7 +131,11 @@ function LoginPage() {
           )}
         </div>
         {inlineError && <p className="text-sm text-destructive">{inlineError}</p>}
-        <Button type="submit" className="w-full" disabled={mutation.isPending}>
+        {/*
+          Added 'login-btn' for scoping uppercase style for the login button only.
+          This avoids overbroad selectors or needing to uppercase the string directly.
+        */}
+        <Button type="submit" className="w-full login-btn" disabled={mutation.isPending}>
           {mutation.isPending ? <Spinner /> : 'Log in'}
         </Button>
       </form>

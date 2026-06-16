@@ -153,7 +153,11 @@ export function LoginScreen() {
               className="h-10"
             />
           </div>
-          <Button type="submit" className="h-10 w-full" disabled={submitting}>
+          {/*
+            Added 'login-btn' for scoping uppercase style for the login button only.
+            This avoids overbroad selectors or needing to uppercase the string directly.
+          */}
+          <Button type="submit" className="h-10 w-full login-btn" disabled={submitting}>
             {submitting ? <Spinner /> : 'Sign in'}
           </Button>
         </form>
