@@ -81,6 +81,14 @@
   .font-mono {
     font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  /*
+   * Uppercase all login button text for visual consistency with design. This
+   * is only applied to elements with .login-btn to avoid overbroad selectors.
+   */
+  .login-btn {
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
 }
 
 /*
