@@ -131,7 +131,7 @@ function LoginPage() {
           )}
         </div>
         {inlineError && <p className="text-sm text-destructive">{inlineError}</p>}
-        <Button type="submit" className="w-full" disabled={mutation.isPending}>
+        <Button type="submit" className="w-full" disabled={mutation.isPending} style={{ textTransform: 'uppercase' }}>
           {mutation.isPending ? <Spinner /> : 'Log in'}
         </Button>
       </form>
