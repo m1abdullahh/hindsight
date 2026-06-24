@@ -1,7 +1,7 @@
 {
   "$schema": "./tauri.conf.schema.json",
   "productName": "Hindsight",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "identifier": "app.hindsight.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev:vite",
