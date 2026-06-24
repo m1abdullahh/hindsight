@@ -153,7 +153,7 @@ export function LoginScreen() {
               className="h-10"
             />
           </div>
-          <Button type="submit" className="h-10 w-full" disabled={submitting}>
+          <Button type="submit" className="h-10 w-full" disabled={submitting} style={{ textTransform: 'uppercase' }}>
             {submitting ? <Spinner /> : 'Sign in'}
           </Button>
         </form>
