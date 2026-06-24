@@ -1,6 +1,6 @@
 [package]
 name = "hindsight"
-version = "0.2.5"
+version = "0.2.6"
 description = "Hindsight desktop tracker"
 edition = "2021"
 rust-version = "1.77"
@@ -19,7 +19,6 @@ tauri-plugin-os = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-process = "2"
 
-# Updater is desktop-only; mobile builds don't ship it.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 
