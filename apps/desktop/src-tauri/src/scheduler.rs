@@ -72,6 +72,18 @@ pub fn spawn(
                 _ => continue,
             }
 
+            // Never capture while the session is locked. The lock-pause
+            // normally arrives via lock_watcher → webview → set_tracking,
+            // but a locked machine can suspend the hidden webview, so that
+            // round trip may not land until unlock. state_rx would then
+            // still read "active" — check the OS directly instead of
+            // trusting it. Skipping reschedules a fresh window, so captures
+            // resume automatically after unlock.
+            if crate::lock_watcher::detect_locked().await {
+                tracing::info!("session locked at capture deadline; skipping capture");
+                continue;
+            }
+
             // Capture (blocking; runs on a Tokio blocking pool to avoid
             // stalling the runtime). One shot per attached monitor.
             let capture_result = tokio::task::spawn_blocking(capture::capture_all).await;
