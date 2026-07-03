@@ -49,7 +49,12 @@ pub fn spawn(app: AppHandle) -> tokio::task::JoinHandle<()> {
     })
 }
 
-async fn detect_locked() -> bool {
+/// Instantaneous OS lock-state check. Public so the scheduler can enforce
+/// "never capture while locked" directly at the capture deadline — the
+/// event → webview → set_tracking pause path can't be trusted for that,
+/// because a locked/hidden webview may be suspended by the OS and never
+/// process the pause until unlock.
+pub async fn detect_locked() -> bool {
     #[cfg(target_os = "windows")]
     {
         windows_impl::is_locked()
