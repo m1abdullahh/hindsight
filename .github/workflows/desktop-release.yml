@@ -85,15 +85,48 @@ jobs:
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile
 
-      # macOS builds are intentionally left ad-hoc signed (no code-signing
-      # identity imported). A self-signed cert was tried for TCC/Screen-Recording
-      # stability, but macOS Gatekeeper distrusts it, so the auto-updater's
-      # post-install relaunch was rejected ("signature verification failed", app
-      # quits). Ad-hoc is what shipped before and what the in-app updater can
-      # relaunch cleanly. Proper auto-update + Screen Recording both working
-      # requires an Apple Developer ID cert + notarization (Developer Program) —
-      # add that here, plus APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID on the
-      # tauri-action step, when an account is available.
+      # Import a self-signed code-signing cert into a temporary keychain so
+      # `tauri build` can produce a properly signed .app + .dmg. Without this
+      # the build is ad-hoc signed, which macOS TCC treats as unstable identity
+      # and silently denies Screen Recording capture even when the toggle is on.
+      # Skipped if the secret isn't set (build falls back to ad-hoc).
+      - name: Import macOS signing certificate
+        if: matrix.platform == 'macos-latest' && env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PWD="$(openssl rand -base64 32)"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode --output "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -A -t cert -f pkcs12 \
+            -T /usr/bin/codesign
+
+          # Grant codesign access to private keys without GUI prompts.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          # Put our keychain ahead of the default so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed -e 's/"//g')
+
+          # Sanity check — must print the imported identity. Note: `-v` is
+          # omitted on purpose; self-signed certs aren't in the system trust
+          # store, so `-v` would filter them out and print "0 valid identities".
+          # codesign doesn't check trust state, only that the identity exists
+          # and the private key is accessible.
+          security find-identity -p codesigning "$KEYCHAIN_PATH"
 
       # Notes for this release. If apps/desktop/RELEASE_NOTES.md exists and is
       # non-empty, its contents become the release body — which tauri-action
@@ -121,9 +154,7 @@ jobs:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           VITE_WEB_BASE_URL: ${{ vars.VITE_WEB_BASE_URL }}
           API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
-          # No APPLE_SIGNING_IDENTITY: macOS is built ad-hoc on purpose (see the
-          # note above the build steps) so the auto-updater can relaunch without
-          # Gatekeeper rejecting an untrusted self-signed identity.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           # Updater signing — required for tauri-plugin-updater. The private
           # key is generated locally with `pnpm tauri signer generate` and
           # uploaded as a repo secret; the matching public key is embedded in

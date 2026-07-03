@@ -1,33 +1,12 @@
-import type { MembershipDto, ProjectDto, TimeEntryDto, UserDto } from '@hindsight/shared/dto';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { MembershipDto, TimeEntryDto, UserDto } from '@hindsight/shared/dto';
+import { useQuery } from '@tanstack/react-query';
 import { Link, createFileRoute } from '@tanstack/react-router';
-import { ArrowLeft, Plus } from 'lucide-react';
-import { useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { ArrowLeft } from 'lucide-react';
 
 import { AvatarLive } from '@/components/ui/avatar-live';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Pill } from '@/components/ui/pill';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
   TableBody,
@@ -37,8 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useToast } from '@/components/ui/use-toast';
-import { ApiError, apiGet, apiPost } from '@/lib/api';
+import { ApiError, apiGet } from '@/lib/api';
 import { formatDateTime, formatHours, formatRelative } from '@/lib/format';
 import { formatMoney } from '@/lib/money';
 import { queryKeys } from '@/lib/queries';
@@ -195,23 +173,14 @@ function MemberDetailPage() {
             <p className="mt-0.5 text-[13px] text-ink3">{memberRow.user.email}</p>
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
-            {isAdmin && (
-              <AddTimeDialog
-                orgId={params.orgId}
-                userId={params.userId}
-                userName={memberRow.user.name}
-              />
-            )}
-            {memberRow.membership.role === 'owner' ? (
-              <Pill tone="dark">Owner</Pill>
-            ) : memberRow.membership.role === 'admin' ? (
-              <Pill tone="accent">Admin</Pill>
-            ) : (
-              <Pill>Member</Pill>
-            )}
-          </div>
+        <div className="flex flex-col items-end gap-1">
+          {memberRow.membership.role === 'owner' ? (
+            <Pill tone="dark">Owner</Pill>
+          ) : memberRow.membership.role === 'admin' ? (
+            <Pill tone="accent">Admin</Pill>
+          ) : (
+            <Pill>Member</Pill>
+          )}
           <span className="text-[11px] text-ink4">
             Joined {formatRelative(memberRow.membership.createdAt)}
           </span>
@@ -369,201 +338,5 @@ function MemberDetailPage() {
         </div>
       </section>
     </div>
-  );
-}
-
-interface AddTimeForm {
-  projectId: string;
-  date: string;
-  hours: number;
-  minutes: number;
-  notes: string;
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-// Admin-only: manually record time on a member's behalf (project + day +
-// duration). Counts as active/billable time on reports, same as tracked time.
-function AddTimeDialog({
-  orgId,
-  userId,
-  userName,
-}: {
-  orgId: string;
-  userId: string;
-  userName: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-
-  const projectsQuery = useQuery({
-    queryKey: queryKeys.projects(orgId),
-    enabled: open,
-    queryFn: () => apiGet<{ projects: ProjectDto[] }>(`/orgs/${orgId}/projects`),
-  });
-  const projects = (projectsQuery.data?.projects ?? []).filter((p) => p.archivedAt === null);
-
-  const form = useForm<AddTimeForm>({
-    defaultValues: { projectId: '', date: todayIso(), hours: 1, minutes: 0, notes: '' },
-  });
-
-  const mutation = useMutation({
-    mutationFn: (input: {
-      projectId: string;
-      date: string;
-      durationSeconds: number;
-      notes?: string;
-    }) => apiPost<TimeEntryDto>(`/orgs/${orgId}/members/${userId}/time-entries`, input),
-    onSuccess: () => {
-      // Prefix-match invalidation refreshes the member's time totals and the
-      // recent-sessions list regardless of their filter variants.
-      queryClient.invalidateQueries({ queryKey: ['orgs', orgId, 'reports', 'time-totals'] });
-      queryClient.invalidateQueries({ queryKey: ['orgs', orgId, 'time-entries'] });
-      toast({ title: 'Time added', description: `Added to ${userName}'s record.` });
-      setOpen(false);
-      form.reset({ projectId: '', date: todayIso(), hours: 1, minutes: 0, notes: '' });
-    },
-    onError: (err) => {
-      toast({
-        title: 'Could not add time',
-        description: err instanceof ApiError ? err.message : 'Unknown error',
-        variant: 'destructive',
-      });
-    },
-  });
-
-  const onSubmit = form.handleSubmit((values) => {
-    if (!values.projectId) {
-      form.setError('projectId', { message: 'Pick a project' });
-      return;
-    }
-    const hours = Number(values.hours) || 0;
-    const minutes = Number(values.minutes) || 0;
-    const durationSeconds = hours * 3600 + minutes * 60;
-    if (durationSeconds < 1) {
-      form.setError('minutes', { message: 'Enter a duration greater than zero' });
-      return;
-    }
-    if (durationSeconds > 86_400) {
-      form.setError('hours', { message: 'Maximum is 24 hours' });
-      return;
-    }
-    mutation.mutate({
-      projectId: values.projectId,
-      date: values.date,
-      durationSeconds,
-      ...(values.notes.trim() ? { notes: values.notes.trim() } : {}),
-    });
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="h-8 gap-1.5">
-          <Plus className="h-3.5 w-3.5" />
-          Add time
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add time for {userName}</DialogTitle>
-          <DialogDescription>
-            Manually record time the member didn&apos;t track. It counts as active hours on reports.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4" noValidate>
-          <div className="space-y-2">
-            <Label htmlFor="add-time-project">Project</Label>
-            <Select
-              value={form.watch('projectId')}
-              onValueChange={(v) => {
-                form.setValue('projectId', v);
-                form.clearErrors('projectId');
-              }}
-            >
-              <SelectTrigger id="add-time-project">
-                <SelectValue
-                  placeholder={projectsQuery.isLoading ? 'Loading…' : 'Select a project'}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {form.formState.errors.projectId && (
-              <p className="text-xs text-destructive">{form.formState.errors.projectId.message}</p>
-            )}
-            {!projectsQuery.isLoading && projects.length === 0 && (
-              <p className="text-[11px] text-ink4">No active projects in this org.</p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="add-time-date">Date</Label>
-            <Input id="add-time-date" type="date" max={todayIso()} {...form.register('date')} />
-          </div>
-
-          <div className="space-y-2">
-            <Label>Duration</Label>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5">
-                <Input
-                  id="add-time-hours"
-                  type="number"
-                  min={0}
-                  max={24}
-                  className="w-20"
-                  {...form.register('hours', { valueAsNumber: true })}
-                />
-                <span className="text-[12px] text-ink3">h</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Input
-                  id="add-time-minutes"
-                  type="number"
-                  min={0}
-                  max={59}
-                  className="w-20"
-                  {...form.register('minutes', { valueAsNumber: true })}
-                />
-                <span className="text-[12px] text-ink3">m</span>
-              </div>
-            </div>
-            {(form.formState.errors.hours || form.formState.errors.minutes) && (
-              <p className="text-xs text-destructive">
-                {form.formState.errors.hours?.message ?? form.formState.errors.minutes?.message}
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="add-time-notes">Note (optional)</Label>
-            <Input
-              id="add-time-notes"
-              type="text"
-              placeholder="e.g. forgot to start the tracker"
-              {...form.register('notes')}
-            />
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? <Spinner className="mr-1.5 h-3.5 w-3.5" /> : null}
-              Add time
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
