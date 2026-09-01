@@ -5,6 +5,8 @@
 - When you go idle and the tracker auto-pauses, you'll now get a Windows notification — same as the one you see for screenshots — so you know captures have stopped until you're back. A second notification fires when you return and tracking resumes.
 - The in-app "Keep / Discard idle" prompt has been removed in favour of the new notifications. Idle time is now always recorded on the entry, which is reflected in the activity % on your reports; billable time is unchanged (only active time has ever counted toward pay).
 - Tracker now pauses the moment you lock your screen (Win+L on Windows, Ctrl+Cmd+Q on macOS, screensaver on Linux) and resumes when you unlock — no more waiting for the 5-minute idle timer. Locked time is left out of the session entirely (not counted as either active or idle), so reports show a clean gap.
+- On Linux (Wayland desktops — the default on Ubuntu 22.04+ and Fedora), the app no longer asks you to approve every single screenshot. You approve screen sharing once, pick which monitors to share, and captures then run silently — the approval survives restarts and can be revoked any time from your system's privacy settings. While the tracker is signed in you'll see your desktop's screen-sharing indicator, which is the system confirming the app can capture.
+- On Linux, every capture now shows a "Screenshot captured" banner **and** plays a short shutter sound, matching the heads-up Windows already gives you. Previously the banner often didn't appear at all and there was never any sound.
 
 ## Fixes
 

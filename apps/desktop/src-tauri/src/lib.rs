@@ -15,6 +15,9 @@ mod permissions;
 mod scheduler;
 mod outbox_sweeper;
 mod uploader;
+
+#[cfg(target_os = "linux")]
+mod wayland_capture;
 #[cfg(target_os = "windows")]
 mod win_aumid;
 
@@ -219,6 +222,17 @@ pub fn run() {
                 .join("device_token");
             let tokens: Arc<DeviceTokenStore> = Arc::new(DeviceTokenStore::load(token_path));
             app.manage(tokens.clone());
+
+            // 1b. Wayland captures go through the ScreenCast portal, whose
+            //     restore token lives beside the device token so the user is
+            //     only ever asked to approve sharing once.
+            #[cfg(target_os = "linux")]
+            wayland_capture::set_token_path(
+                app.path()
+                    .app_data_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir())
+                    .join("screencast_token"),
+            );
 
             // 2. Activity counters + OS event hooks.
             let counters: Arc<ActivityCounters> = ActivityCounters::new();

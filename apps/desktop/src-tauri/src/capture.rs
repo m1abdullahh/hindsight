@@ -67,21 +67,24 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Captures all attached monitors. When multiple monitors are present we
-/// stitch them side-by-side into a single wide image so each capture event
-/// produces ONE screenshot (one row, one thumbnail) covering the whole
-/// workspace. Single-monitor setups produce a single image unchanged.
+/// Grabs one raw image per monitor using whichever backend suits the platform.
 ///
-/// Failures on an individual monitor are logged and skipped; if at least one
-/// monitor was captured we proceed with what we have. If every monitor fails
-/// the function errors.
-pub fn capture_all() -> Result<Vec<CapturedScreenshot>, CaptureError> {
+/// On Wayland this MUST be the ScreenCast portal: `xcap` falls back to the
+/// Screenshot portal there, which makes GNOME ask the user to confirm every
+/// single capture (see `wayland_capture` for the full story). There is
+/// deliberately no fallback to `xcap` on Wayland — a failed screencast would
+/// otherwise degrade into a consent dialog once per capture interval.
+fn grab_monitors() -> Result<Vec<RgbaImage>, CaptureError> {
+    #[cfg(target_os = "linux")]
+    if crate::wayland_capture::is_wayland() {
+        return crate::wayland_capture::capture_monitors().map_err(CaptureError::CaptureFailed);
+    }
+
     let monitors = Monitor::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
     if monitors.is_empty() {
         return Err(CaptureError::NoDisplays);
     }
 
-    let captured_at_ms = now_ms();
     let mut images: Vec<RgbaImage> = Vec::with_capacity(monitors.len());
     for (idx, monitor) in monitors.iter().enumerate() {
         match monitor.capture_image() {
@@ -97,6 +100,20 @@ pub fn capture_all() -> Result<Vec<CapturedScreenshot>, CaptureError> {
             "all monitor captures failed".into(),
         ));
     }
+    Ok(images)
+}
+
+/// Captures all attached monitors. When multiple monitors are present we
+/// stitch them side-by-side into a single wide image so each capture event
+/// produces ONE screenshot (one row, one thumbnail) covering the whole
+/// workspace. Single-monitor setups produce a single image unchanged.
+///
+/// Failures on an individual monitor are logged and skipped; if at least one
+/// monitor was captured we proceed with what we have. If every monitor fails
+/// the function errors.
+pub fn capture_all() -> Result<Vec<CapturedScreenshot>, CaptureError> {
+    let captured_at_ms = now_ms();
+    let images = grab_monitors()?;
 
     // Single monitor: encode as-is (no stitching overhead).
     if images.len() == 1 {

@@ -23,10 +23,13 @@ tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 
 # Capture + image encoding. xcap is the maintained successor to the abandoned
-# `screenshots` crate; unlike `screenshots` 0.8 (X11/wlr-screencopy only, which
-# crashes natively on GNOME/KDE Wayland) it captures through the XDG desktop
-# portal + PipeWire, so it works on modern Linux desktops. It returns the same
-# `image` 0.25 RgbaImage we encode with, so no cross-version shim is needed.
+# `screenshots` crate and handles Windows, macOS and Linux/X11. It returns the
+# same `image` 0.25 RgbaImage we encode with, so no cross-version shim is needed.
+#
+# NOTE: xcap only uses PipeWire for its *video recorder*. Still captures on
+# Wayland go through org.freedesktop.portal.Screenshot, which GNOME confirms
+# with a dialog every single call and cannot remember. Wayland therefore does
+# not use xcap at all — see src/wayland_capture.rs.
 #
 # Pinned to EXACTLY 0.8.0: later xcap (0.8.3, 0.9.x) pull pipewire-rs 0.9 →
 # libspa 0.9.2, whose bindings need the `spa_video_info_raw.flags` field added
@@ -95,6 +98,16 @@ tauri-winrt-notification = "0.7"
 # `tokio` feature integrates zbus's executor with our existing Tokio runtime.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+# Silent capture on Wayland (see src/wayland_capture.rs). ashpd drives the
+# ScreenCast portal handshake — including the restore_token that stops GNOME
+# prompting on every capture — and pipewire pulls the frames.
+#
+# ashpd 0.11 is the first release on zbus 5, so it shares our zbus rather than
+# linking a second copy. pipewire is pinned to 0.8 for the same reason xcap is:
+# 0.9 needs libspa bindings against PipeWire >= 1.4, which CI runners don't ship.
+ashpd = "0.11"
+pipewire = "=0.8.0"
 
 [features]
 default = ["custom-protocol"]

@@ -6,8 +6,11 @@
 //! System Settings → Privacy & Security → Screen Recording.
 //!
 //! We don't have an equivalent on Windows (screencapture has no permission
-//! gate) or Linux (X11 doesn't gate; Wayland gates per-portal which the
-//! `screenshots` crate handles transparently).
+//! gate) or on Linux/X11 (no gate at all). Linux/Wayland does gate capture,
+//! but through the ScreenCast portal, which grants once and is then restored
+//! silently from a saved token — see `wayland_capture`. That consent is
+//! collected by the portal on the first capture rather than up front, so
+//! there is still nothing for this module to check.
 
 use serde::Serialize;
 
