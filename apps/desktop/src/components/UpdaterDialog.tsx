@@ -1,4 +1,4 @@
-import { Download, RotateCw, X as CloseIcon } from 'lucide-react';
+import { Download, ExternalLink, RotateCw, X as CloseIcon } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import type { UpdaterApi } from '@/lib/use-updater';
@@ -14,7 +14,7 @@ interface UpdaterDialogProps {
 }
 
 export function UpdaterDialog({ updater }: UpdaterDialogProps) {
-  const { phase, startInstall, restart, dismiss } = updater;
+  const { phase, startInstall, restart, dismiss, openReleasePage } = updater;
 
   // `checking` and `idle` never render — we only surface UI once there's
   // something the user needs to know about or act on.
@@ -99,10 +99,18 @@ export function UpdaterDialog({ updater }: UpdaterDialogProps) {
 
         {phase.kind === 'error' && (
           <>
-            <p className="mb-3 break-words text-[12px] text-destructive">{phase.message}</p>
-            <div className="flex justify-end">
+            <p className="mb-2 text-[12px] text-ink2">
+              The update couldn&apos;t be installed automatically. You can download and install it
+              manually from the releases page.
+            </p>
+            <p className="mb-3 break-words text-[11px] text-ink3">{phase.message}</p>
+            <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={dismiss}>
                 Close
+              </Button>
+              <Button size="sm" onClick={() => void openReleasePage()}>
+                <ExternalLink className="mr-1.5 h-4 w-4" />
+                Download update
               </Button>
             </div>
           </>

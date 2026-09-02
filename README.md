@@ -117,6 +117,15 @@ GitHub Actions workflow (manual `workflow_dispatch`), which drafts a GitHub
 Release and publishes the `latest.json` consumed by the in-app auto-updater.
 See [`docs/12-desktop-updater.md`](./docs/12-desktop-updater.md).
 
+**Installing on Linux — prefer the AppImage.** The release ships `.AppImage`,
+`.deb`, and `.rpm`. Only the **AppImage** auto-updates silently: the updater
+replaces the file in place, no root prompt. The `.deb`/`.rpm` packages must be
+installed by the system package manager, which needs administrator rights, so
+their in-app update shows a polkit password prompt and fails outright if no
+polkit agent answers it — those users update manually with
+`sudo apt install ./Hindsight_<version>_amd64.deb` (then restart the app).
+Point end users at the AppImage unless they specifically need a system package.
+
 ## Environment variables
 
 The full list lives in `.env.example` (committed) once the API exists. Highlights:

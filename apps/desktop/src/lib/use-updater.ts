@@ -1,6 +1,12 @@
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { open } from '@tauri-apps/plugin-shell';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+// Opened when an auto-install fails (notably Linux .deb/.rpm, which need a
+// root prompt to run the package manager and can't self-install like the
+// AppImage does). Sending the user here lets them grab the new build manually.
+const RELEASES_URL = 'https://github.com/m1abdullahh/hindsight/releases/latest';
 
 // Re-check this often once the app has booted. The check itself is a cheap
 // HEAD-then-GET against latest.json so we don't worry about hammering GitHub.
@@ -24,6 +30,9 @@ export interface UpdaterApi {
   startInstall: () => Promise<void>;
   restart: () => Promise<void>;
   dismiss: () => void;
+  /** Opens the GitHub releases page so the user can update manually when the
+   *  in-app install can't complete (e.g. a .deb/.rpm that needs root). */
+  openReleasePage: () => Promise<void>;
 }
 
 export function useUpdater(): UpdaterApi {
@@ -112,6 +121,14 @@ export function useUpdater(): UpdaterApi {
     await relaunch();
   }, []);
 
+  const openReleasePage = useCallback(async () => {
+    try {
+      await open(RELEASES_URL);
+    } catch (err) {
+      console.warn('[updater] could not open release page', err);
+    }
+  }, []);
+
   const dismiss = useCallback(() => {
     if (phase.kind === 'available') {
       dismissedVersions.current.add(phase.version);
@@ -119,5 +136,5 @@ export function useUpdater(): UpdaterApi {
     setPhase({ kind: 'idle' });
   }, [phase]);
 
-  return { phase, startInstall, restart, dismiss };
+  return { phase, startInstall, restart, dismiss, openReleasePage };
 }
